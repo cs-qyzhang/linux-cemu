@@ -31,6 +31,7 @@
 
 #include "trace.h"
 #include "nvme.h"
+#include "cemu.h"
 
 #define SQ_SIZE(q)	((q)->q_depth << (q)->sqes)
 #define CQ_SIZE(q)	((q)->q_depth * sizeof(struct nvme_completion))
@@ -3006,6 +3007,14 @@ static int nvme_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	if (result)
 		goto out_uninit_ctrl;
 
+#ifdef CONFIG_NVME_CEMU
+	// CEMU CSD
+	printk(KERN_INFO "vendor: %x, device: %x\n", pdev->vendor, pdev->device);
+	if (dev->ctrl.quirks & NVME_QUIRK_CEMU) {
+		cemu_dev_add(pdev, &dev->ctrl);
+	}
+#endif
+
 	result = nvme_setup_prp_pools(dev);
 	if (result)
 		goto out_dev_unmap;
@@ -3149,6 +3158,10 @@ static void nvme_remove(struct pci_dev *pdev)
 	nvme_release_prp_pools(dev);
 	nvme_dev_unmap(dev);
 	nvme_uninit_ctrl(&dev->ctrl);
+
+#ifdef CONFIG_NVME_CEMU
+	cemu_dev_remove(pdev, &dev->ctrl);
+#endif
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -3361,6 +3374,13 @@ static const struct pci_device_id nvme_id_table[] = {
 		.driver_data = NVME_QUIRK_IDENTIFY_CNS |
 				NVME_QUIRK_DISABLE_WRITE_ZEROES |
 				NVME_QUIRK_BOGUS_NID, },
+#ifdef CONFIG_NVME_CEMU
+	{ PCI_VDEVICE(INTEL, 0x8888),	/* Qemu emulated CSD controller */
+		.driver_data = NVME_QUIRK_IDENTIFY_CNS |
+				NVME_QUIRK_DISABLE_WRITE_ZEROES |
+				NVME_QUIRK_BOGUS_NID |
+				NVME_QUIRK_CEMU, },
+#endif
 	{ PCI_VDEVICE(REDHAT, 0x0010),	/* Qemu emulated controller */
 		.driver_data = NVME_QUIRK_BOGUS_NID, },
 	{ PCI_DEVICE(0x126f, 0x2263),	/* Silicon Motion unidentified */

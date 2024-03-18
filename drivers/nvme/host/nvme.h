@@ -162,6 +162,11 @@ enum nvme_quirks {
 	 * Disables simple suspend/resume path.
 	 */
 	NVME_QUIRK_FORCE_NO_SIMPLE_SUSPEND	= (1 << 20),
+
+	/*
+	 * CEMU CSD device
+	 */
+	NVME_QUIRK_CEMU 			= (1 << 21),
 };
 
 /*
@@ -392,6 +397,10 @@ struct nvme_ctrl {
 
 	enum nvme_ctrl_type cntrltype;
 	enum nvme_dctype dctype;
+
+#ifdef CONFIG_NVME_CEMU
+	void *cemu_dev_data;
+#endif
 };
 
 static inline enum nvme_ctrl_state nvme_ctrl_state(struct nvme_ctrl *ctrl)
