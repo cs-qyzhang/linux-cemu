@@ -399,7 +399,7 @@ struct nvme_ctrl {
 	enum nvme_dctype dctype;
 
 #ifdef CONFIG_NVME_CEMU
-	void *cemu_dev_data;
+	void *cemu_dev;
 #endif
 };
 

@@ -3007,14 +3007,6 @@ static int nvme_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	if (result)
 		goto out_uninit_ctrl;
 
-#ifdef CONFIG_NVME_CEMU
-	// CEMU CSD
-	printk(KERN_INFO "vendor: %x, device: %x\n", pdev->vendor, pdev->device);
-	if (dev->ctrl.quirks & NVME_QUIRK_CEMU) {
-		cemu_dev_add(pdev, &dev->ctrl);
-	}
-#endif
-
 	result = nvme_setup_prp_pools(dev);
 	if (result)
 		goto out_dev_unmap;
@@ -3080,6 +3072,15 @@ static int nvme_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	nvme_start_ctrl(&dev->ctrl);
 	nvme_put_ctrl(&dev->ctrl);
 	flush_work(&dev->ctrl.scan_work);
+
+#ifdef CONFIG_NVME_CEMU
+	// CEMU CSD
+	printk(KERN_INFO "vendor: %x, device: %x\n", pdev->vendor, pdev->device);
+	if (dev->ctrl.quirks & NVME_QUIRK_CEMU) {
+		cemu_dev_add(pdev, &dev->ctrl);
+	}
+#endif
+
 	return 0;
 
 out_disable:

@@ -1,4 +1,4 @@
-#include <linux/cdev.h>
+#include <linux/blkdev.h>
 #include <linux/dma-mapping.h>
 #include <linux/pci.h>
 #include <linux/module.h>
@@ -9,18 +9,16 @@
 
 #include "cemu.h"
 
-#define CEMU_DEVICE_NAME	"cemu"
+#define CEMU_BLKDEV_NAME	"cemu"
 #define CEMU_MAX_MINOR		64
 #define CEMU_SLM_BAR		2
 
-static int cemu_major;
-static int cemu_minor;
-static struct class *cemu_class;
-static struct cemu_device_data *cemu_dev_data[CEMU_MAX_MINOR];
-
-struct cemu_device_data {
+struct cemu_dev {
 	struct cdev cdev;
+	struct gendisk *disk;
+	struct request_queue *rq;
 	struct device *dev;
+	struct block_device *nvme_bdev;
 	struct pci_dev *pdev;
 	struct scatterlist *dma_sgl;
 	int sgl_nents;
@@ -29,10 +27,15 @@ struct cemu_device_data {
 	dma_addr_t p2p_addr;
 };
 
+static int cemu_major;
+static int cemu_minor;
+static struct class *cemu_class;
+static struct cemu_dev *cemu_dev[CEMU_MAX_MINOR];
+
 static int cemu_dev_mmap(struct file *filp, struct vm_area_struct *vma)
 {
 	size_t size = vma->vm_end - vma->vm_start;
-	struct cemu_device_data *dev = filp->private_data;
+	struct cemu_dev *dev = filp->private_data;
 	struct mm_struct *mm = current->mm;
 	int err = 0;
 
@@ -66,58 +69,70 @@ static int cemu_dev_mmap(struct file *filp, struct vm_area_struct *vma)
 	return 0;
 }
 
-static int cemu_dev_open(struct inode *inode, struct file *filp)
+static int cemu_bdev_open(struct gendisk *bdev, blk_mode_t mode)
 {
-	struct cemu_device_data *dev = container_of(inode->i_cdev, struct cemu_device_data, cdev);
-	filp->private_data = dev; // For other methods to have access to the device
+	printk(KERN_INFO "CEMU CSD cemu_blkdev_open\n");
 	return 0;
 }
 
-static ssize_t cemu_read(struct file *filp, char __user *buf, size_t size, loff_t *off)
+static void cemu_bdev_release(struct gendisk *disk)
 {
-	printk(KERN_INFO "CEMU CSD cemu_read, size: %ld, off: %lld\n", size, *off);
-	*off += size;
-	return size;
+	printk(KERN_INFO "CEMU CSD cemu_blkdev_release\n");
 }
 
-static ssize_t cemu_write(struct file *filp, const char __user *buf, size_t size, loff_t *off)
+static int cemu_bdev_ioctl(struct block_device *bdev, fmode_t mode,
+	unsigned int cmd, unsigned long arg)
 {
-	printk(KERN_INFO "CEMU CSD cemu_write, size: %ld, off: %lld\n", size, *off);
-	*off += size;
-	return size;
+	printk(KERN_INFO "CEMU CSD cemu_blkdev_ioctl\n");
+	return 0;
 }
 
-static struct file_operations cemu_fops = {
-	.owner = THIS_MODULE,
-	.open = cemu_dev_open,
-	.read = cemu_read,
-	.write = cemu_write,
-	.mmap = cemu_dev_mmap,
+static void cemu_bdev_submit_bio(struct bio *bio)
+{
+	struct cemu_dev *dev = bio->bi_bdev->bd_disk->private_data;
+
+	printk(KERN_INFO "CEMU CSD submit_bio\n");
+
+	if (dev == NULL) {
+		bio_io_error(bio);
+		return;
+	}
+
+	bio = bio_split_to_limits(bio);
+	if (!bio)
+		return;
+
+	// /* bio could be mergeable after passing to underlayer */
+	// bio->bi_opf &= ~REQ_NOMERGE;
+
+	bio_set_dev(bio, dev->nvme_bdev);
+	submit_bio_noacct(bio);
+}
+
+const struct block_device_operations cemu_bdev_ops =
+{
+	.owner		= THIS_MODULE,
+	.submit_bio	= cemu_bdev_submit_bio,
+	.open		= cemu_bdev_open,
+	.release	= cemu_bdev_release,
+	.ioctl		= cemu_bdev_ioctl,
 };
 
-int cemu_dev_add(struct pci_dev *pdev, struct nvme_ctrl *ctrl)
+static int cemu_p2pmem_setup(struct pci_dev *pdev, struct cemu_dev *dev)
 {
-	struct cemu_device_data *dev_data;
 	struct scatterlist *sgl;
-	int nents = 10;
+	int nents;
 	int err;
 
-	printk(KERN_INFO "CEMU cemu_dev_add\n");
+	dev->size = pci_resource_len(pdev, CEMU_SLM_BAR);
+	printk(KERN_INFO "CEMU CSD bar 2 size: %zu\n", dev->size);
 
-	dev_data = kzalloc(sizeof(struct cemu_device_data), GFP_KERNEL);
-	if (!dev_data) {
-		return -ENOMEM;
-	}
-	dev_data->pdev = pdev;
-
-	dev_data->size = pci_resource_len(pdev, CEMU_SLM_BAR);
-	printk(KERN_INFO "CEMU CSD bar 2 size: %zu\n", dev_data->size);
-
-	err = pci_p2pdma_add_resource(pdev, CEMU_SLM_BAR, dev_data->size, 0);
+	err = pci_p2pdma_add_resource(pdev, CEMU_SLM_BAR, dev->size, 0);
 	if (err) {
 		printk(KERN_ERR "CEMU CSD p2pdma add resource failed\n");
 		return err;
 	}
+
 	pci_p2pmem_publish(pdev, true);
 	WARN(pci_has_p2pmem(pdev) == false, "CEMU CSD p2pmem not enabled!\n");
 
@@ -140,73 +155,93 @@ int cemu_dev_add(struct pci_dev *pdev, struct nvme_ctrl *ctrl)
 		printk(KERN_INFO "CEMU CSD sgl[%d]: offset: %u, dma_flags: %u\n", i, sgl[i].offset, sgl[i].dma_flags);
 	}
 
-	dev_data->dma_sgl = sgl;
-	dev_data->sgl_nents = nents;
-	dev_data->p2p_addr = dev_data->dma_sgl[0].dma_address;
+	dev->dma_sgl = sgl;
+	dev->sgl_nents = nents;
+	dev->p2p_addr = dev->dma_sgl[0].dma_address;
 
-	// create char device
-	cdev_init(&dev_data->cdev, &cemu_fops);
-	dev_data->cdev.owner = THIS_MODULE;
+	return 0;
+}
 
-	dev_data->minor = cemu_minor++;
-	err = cdev_add(&dev_data->cdev, MKDEV(cemu_major, dev_data->minor), 1);
-	if (err) {
-		dma_unmap_sg(ctrl->dev, dev_data->dma_sgl, dev_data->sgl_nents, DMA_BIDIRECTIONAL);
-		pci_p2pmem_free_sgl(pdev, dev_data->dma_sgl);
-		kfree(dev_data);
-		return err;
+int cemu_dev_add(struct pci_dev *pdev, struct nvme_ctrl *ctrl)
+{
+	struct cemu_dev *dev;
+	struct gendisk *disk;
+	struct nvme_ns *ns;
+	int err;
+
+	printk(KERN_INFO "CEMU cemu_dev_add\n");
+
+	dev = kzalloc(sizeof(struct cemu_dev), GFP_KERNEL);
+	if (!dev) {
+		return -ENOMEM;
+	}
+	dev->pdev = pdev;
+
+	ns = nvme_find_get_ns(ctrl, 1);	// FIXME: nsid
+	if (ns == NULL) {
+		printk(KERN_ERR "CEMU cemu_dev_add: nvme_find_get_ns failed\n");
+	}
+	dev->nvme_bdev = ns->disk->part0;
+
+	cemu_p2pmem_setup(pdev, dev);
+
+	printk(KERN_INFO "CEMU cemu_dev_add start alloc_disk\n");
+	disk = blk_alloc_disk(ctrl->numa_node);
+	if (IS_ERR(disk)) {
+		return PTR_ERR(disk);
 	}
 
-	dev_data->dev = device_create(cemu_class, &pdev->dev,
-			MKDEV(cemu_major, dev_data->minor), NULL,
-			"cemu%d", dev_data->minor);
+	disk->major = cemu_major;
+	disk->first_minor = dev->minor;
+	disk->minors = 1;
+	disk->fops = &cemu_bdev_ops;
+	disk->private_data = dev;
+	sprintf(disk->disk_name, "cemu%d", dev->minor);
+	blk_set_stacking_limits(&disk->queue->limits);
+	set_capacity(disk, dev->size / SECTOR_SIZE);
+	// blk_queue_write_cache(disk->queue, true, true);
 
-	printk(KERN_INFO "CEMU cemu_dev_add: add /dev/cemu%d\n", dev_data->minor);
-	cemu_dev_data[dev_data->minor] = dev_data;
-	ctrl->cemu_dev_data = dev_data;
+	// blk_queue_flag_set(QUEUE_FLAG_NONROT, disk->queue);
+	// blk_queue_flag_set(QUEUE_FLAG_PCI_P2PDMA, disk->queue);
 
+	printk(KERN_INFO "CEMU cemu_dev_add start device_add_disk\n");
+	err = add_disk(disk);
+	if (err)
+		return err;
+
+	dev->disk = disk;
+	dev->rq = disk->queue;
+	cemu_dev[dev->minor] = dev;
+	ctrl->cemu_dev = dev;
+
+	printk(KERN_INFO "CEMU cemu_dev_add: add /dev/cemu%d\n", dev->minor);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(cemu_dev_add);
 
 void cemu_dev_remove(struct pci_dev *pdev, struct nvme_ctrl *ctrl)
 {
-	struct cemu_device_data *dev_data = (struct cemu_device_data*)ctrl->cemu_dev_data;
+	struct cemu_dev *dev = (struct cemu_dev*)ctrl->cemu_dev;
 
 	printk(KERN_INFO "CEMU cemu_dev_remove\n");
-	cemu_dev_data[dev_data->minor] = NULL;
-	device_destroy(cemu_class, MKDEV(cemu_major, dev_data->minor));
-	cdev_del(&dev_data->cdev);
-	dma_unmap_sg(ctrl->dev, dev_data->dma_sgl, dev_data->sgl_nents, DMA_BIDIRECTIONAL);
-	pci_p2pmem_free_sgl(pdev, dev_data->dma_sgl);
-	kfree(dev_data);
+	cemu_dev[dev->minor] = NULL;
+	dma_unmap_sg(ctrl->dev, dev->dma_sgl, dev->sgl_nents, DMA_BIDIRECTIONAL);
+	pci_p2pmem_free_sgl(pdev, dev->dma_sgl);
+	kfree(dev);
 }
 EXPORT_SYMBOL_GPL(cemu_dev_remove);
 
 static int __init cemu_init(void)
 {
-	int result;
-
-	result = register_chrdev(0, CEMU_DEVICE_NAME, &cemu_fops);
-	if (result < 0)
-		return result;
-
-	cemu_major = result;
+	cemu_major = register_blkdev(0, CEMU_BLKDEV_NAME);
 	cemu_minor = 0;
-
-	cemu_class = class_create(CEMU_DEVICE_NAME);
-	if (IS_ERR(cemu_class)) {
-		unregister_chrdev(cemu_major, CEMU_DEVICE_NAME);
-		return PTR_ERR(cemu_class);
-	}
-
 	return 0;
 }
 
 static void __exit cemu_exit(void)
 {
 	class_destroy(cemu_class);
-	unregister_chrdev(cemu_major, CEMU_DEVICE_NAME);
+	unregister_blkdev(cemu_major, CEMU_BLKDEV_NAME);
 }
 
 module_init(cemu_init);
