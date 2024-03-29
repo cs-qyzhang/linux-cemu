@@ -96,6 +96,8 @@
 #define AAFS_MAGIC		0x5a3c69f0
 #define ZONEFS_MAGIC		0x5a4f4653
 
+#define FDMFS_MAGIC		0x19990422
+
 /* Since UDF 2.01 is ISO 13346 based... */
 #define UDF_SUPER_MAGIC		0x15013346
 #define DMA_BUF_MAGIC		0x444d4142	/* "DMAB" */

@@ -32,6 +32,12 @@ static int cemu_minor;
 static struct class *cemu_class;
 static struct cemu_dev *cemu_dev[CEMU_MAX_MINOR];
 
+size_t cemu_dev_get_size(struct block_device *bdev)
+{
+	struct cemu_dev *dev = bdev->bd_disk->private_data;
+	return dev->size;
+}
+
 static int cemu_dev_mmap(struct file *filp, struct vm_area_struct *vma)
 {
 	size_t size = vma->vm_end - vma->vm_start;
