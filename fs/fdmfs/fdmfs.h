@@ -38,7 +38,7 @@ struct fdmfs_sb_info {
 	struct super_block *sb;			/* pointer to VFS super block */
 	struct fdmfs_super_block *raw_super;
 	int root_ino;
-	dma_addr_t fdm_addr;
+	void *fdm_addr;
 	size_t fdm_size;
 	struct list_head fdm_free;
 	struct list_head fdm_used;
@@ -61,5 +61,8 @@ static inline struct fdmfs_inode *FDMFS_I(struct inode *i)
 struct inode *fdmfs_icreate(struct fdmfs_sb_info *sbi, struct mnt_idmap *idmap,
 	const struct inode *dir, umode_t mode, const unsigned char *name);
 void fdmfs_deallocate(struct fdmfs_inode *inode);
+ssize_t fdmfs_copy_file_range(struct file *file_in, loff_t pos_in,
+				     struct file *file_out, loff_t pos_out,
+				     size_t size, unsigned int flags);
 
 #endif // _FDMFS_H

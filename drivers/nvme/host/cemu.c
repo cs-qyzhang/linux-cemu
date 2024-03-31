@@ -38,6 +38,12 @@ size_t cemu_dev_get_size(struct block_device *bdev)
 	return dev->size;
 }
 
+void *cemu_dev_get_p2p_addr(struct block_device *bdev)
+{
+	struct cemu_dev *dev = bdev->bd_disk->private_data;
+	return (void *)phys_to_virt(dev->p2p_addr);
+}
+
 static int cemu_dev_mmap(struct file *filp, struct vm_area_struct *vma)
 {
 	size_t size = vma->vm_end - vma->vm_start;

@@ -3,6 +3,8 @@
 
 #include "fdmfs.h"
 
+extern struct file_operations fdmfs_fops;
+
 static int fdmfs_open(struct inode *inode, struct file *filp) {
 	pr_info("FDMFS: open\n");
 	filp->private_data = inode->i_private;
@@ -15,7 +17,6 @@ static int fdmfs_release(struct inode *inode, struct file *filp) {
 }
 
 static ssize_t fdmfs_read(struct file *filp, char __user *buf, size_t len, loff_t *ppos) {
-	struct inode *inode = file_inode(filp);
 	pr_info("FDMFS: read %zu bytes\n", len);
 	return len;
 }
@@ -38,12 +39,38 @@ static ssize_t fdmfs_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	return 0;
 }
 
-static ssize_t fdmfs_copy_file_range(struct file *file_in, loff_t pos_in,
+ssize_t fdmfs_copy_file_range(struct file *file_in, loff_t pos_in,
 				     struct file *file_out, loff_t pos_out,
 				     size_t size, unsigned int flags)
 {
-	pr_info("FDMFS: copy_file_range %zu bytes\n", size);
-	return size;
+	bool in_is_fdmfs = file_in->f_op == &fdmfs_fops;
+	bool out_is_fdmfs = file_out->f_op == &fdmfs_fops;
+	struct fdmfs_inode *fdmfs_inode = in_is_fdmfs ? file_in->private_data : file_out->private_data;
+	struct fdmfs_sb_info *sbi = fdmfs_inode->sbi;
+	struct kiocb kiocb;
+	struct iov_iter iter;
+	struct bio_vec bvec;
+	struct page *page;
+	ssize_t ret;
+
+	pr_info("FDMFS: copy_file_range %zu bytes, pos_in %llu, pos_out %llu, in_is_fdmfs %d, out_is_fdmfs %d\n", size, pos_in, pos_out, in_is_fdmfs, out_is_fdmfs);
+
+	if (in_is_fdmfs)
+		init_sync_kiocb(&kiocb, file_out);
+	else
+		init_sync_kiocb(&kiocb, file_in);
+	kiocb.ki_pos = pos_out;
+
+	page = virt_to_page(sbi->fdm_addr);
+	bvec_set_page(&bvec, page, size, 0);
+	iov_iter_bvec(&iter, ITER_DEST, &bvec, 1, size);
+
+	if (in_is_fdmfs)
+		ret = call_read_iter(file_out, &kiocb, &iter);
+	else
+		ret = call_read_iter(file_in, &kiocb, &iter);
+	BUG_ON(ret == -EIOCBQUEUED);
+	return ret;
 }
 
 void fdmfs_deallocate(struct fdmfs_inode *inode)
@@ -51,7 +78,6 @@ void fdmfs_deallocate(struct fdmfs_inode *inode)
 	struct fdmfs_sb_info *sbi = inode->sbi;
 	struct fdm_region *region = inode->region;
 	struct fdm_region *r;
-	size_t region_size = region->size;
 
 	if (region == NULL)
 		return;
@@ -149,7 +175,6 @@ err:
 	return ret;
 }
 
-// 文件操作结构体
 struct file_operations fdmfs_fops = {
 	.open			= fdmfs_open,
 	.release		= fdmfs_release,

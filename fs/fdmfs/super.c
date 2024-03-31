@@ -109,6 +109,7 @@ static int fdmfs_fill_super(struct super_block *sb, void *data, int silent)
 	sbi->cemu_dev = sb->s_dev;
 	sbi->cemu_bdev = blkdev_get_no_open(sbi->cemu_dev);
 	sbi->fdm_size = cemu_dev_get_size(sbi->cemu_bdev);
+	sbi->fdm_addr = cemu_dev_get_p2p_addr(sbi->cemu_bdev);
 
 	pr_info("FDMFS: mount... fdm_size %lu\n", sbi->fdm_size);
 

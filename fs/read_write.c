@@ -1402,6 +1402,10 @@ COMPAT_SYSCALL_DEFINE4(sendfile64, int, out_fd, int, in_fd,
 }
 #endif
 
+extern ssize_t fdmfs_copy_file_range(struct file *file_in, loff_t pos_in,
+				     struct file *file_out, loff_t pos_out,
+				     size_t size, unsigned int flags);
+
 /*
  * Performs necessary checks before doing a file copy
  *
@@ -1435,6 +1439,9 @@ static int generic_copy_file_checks(struct file *file_in, loff_t pos_in,
 	 */
 	if (flags & COPY_FILE_SPLICE) {
 		/* cross sb splice is allowed */
+	} else if ((file_in->f_op->copy_file_range == fdmfs_copy_file_range) ||
+		   (file_out->f_op->copy_file_range == fdmfs_copy_file_range)) {
+		/* CEMU CSD */
 	} else if (file_out->f_op->copy_file_range) {
 		if (file_in->f_op->copy_file_range !=
 		    file_out->f_op->copy_file_range)
@@ -1514,7 +1521,11 @@ ssize_t vfs_copy_file_range(struct file *file_in, loff_t pos_in,
 	 * same sb using clone, but for filesystems where both clone and copy
 	 * are supported (e.g. nfs,cifs), we only call the copy method.
 	 */
-	if (!splice && file_out->f_op->copy_file_range) {
+	if (file_in->f_op->copy_file_range == fdmfs_copy_file_range) {
+		ret = file_in->f_op->copy_file_range(file_in, pos_in,
+						      file_out, pos_out,
+						      len, flags);
+	} else if (!splice && file_out->f_op->copy_file_range) {
 		ret = file_out->f_op->copy_file_range(file_in, pos_in,
 						      file_out, pos_out,
 						      len, flags);
