@@ -1,12 +1,7 @@
-#include "linux/dcache.h"
 #include <linux/fs.h>
+#include <linux/iomap.h>
 
 #include "fdmfs.h"
-
-extern struct file_operations fdmfs_fops;
-extern struct file_operations fdmfs_dir_fops;
-extern struct inode_operations fdmfs_inode_ops;
-extern struct inode_operations fdmfs_dir_inode_ops;
 
 static void fdmfs_add_entry(struct fdmfs_inode *dir, struct fdmfs_inode *inode)
 {
@@ -193,7 +188,7 @@ static int fdmfs_rename(struct mnt_idmap *idmap, struct inode *old_dir,
 	return 0;
 }
 
-struct inode_operations fdmfs_dir_inode_ops = {
+const struct inode_operations fdmfs_dir_inode_ops = {
 	.lookup		= fdmfs_lookup,
 	.create		= fdmfs_create,
 	.link		= fdmfs_link,
@@ -204,7 +199,31 @@ struct inode_operations fdmfs_dir_inode_ops = {
 	.getattr	= simple_getattr,
 };
 
-struct inode_operations fdmfs_inode_ops = {
+const struct inode_operations fdmfs_inode_ops = {
 	.setattr	= simple_setattr,
 	.getattr	= simple_getattr,
+};
+
+static int fdmfs_iomap_begin(struct inode *inode, loff_t offset, loff_t length,
+		unsigned flags, struct iomap *iomap, struct iomap *srcmap)
+{
+	struct fdmfs_inode *fdmfs_inode = FDMFS_I(inode);
+	iomap->type = IOMAP_MAPPED;
+	iomap->bdev = fdmfs_inode->sbi->cemu_bdev;
+	iomap->addr = fdmfs_inode->region->off + offset;
+	iomap->length = length;
+	iomap->offset = offset;
+	iomap->flags = 0;
+	return 0;
+}
+
+static int fdmfs_iomap_end(struct inode *inode, loff_t offset, loff_t length,
+			  ssize_t written, unsigned flags, struct iomap *iomap)
+{
+	return 0;
+}
+
+const struct iomap_ops fdmfs_iomap_ops = {
+	.iomap_begin		= fdmfs_iomap_begin,
+	.iomap_end		= fdmfs_iomap_end,
 };

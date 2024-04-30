@@ -1,9 +1,9 @@
+#include <linux/bio.h>
 #include <linux/fs.h>
 #include <linux/falloc.h>
+#include <linux/iomap.h>
 
 #include "fdmfs.h"
-
-extern struct file_operations fdmfs_fops;
 
 static int fdmfs_open(struct inode *inode, struct file *filp) {
 	pr_info("FDMFS: open\n");
@@ -30,7 +30,14 @@ static ssize_t fdmfs_write(struct file *filp, const char __user *buf, size_t len
 static ssize_t fdmfs_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 {
 	pr_info("FDMFS: read_iter\n");
-	return 0;
+	struct inode *ino = file_inode(iocb->ki_filp);
+
+	inode_lock_shared(ino);
+	// struct bio *bio = bio_alloc(sbi->cemu_bdev, nr_vecs, opf, GFP_KERNEL);
+	ssize_t ret = iomap_dio_rw(iocb, iter, &fdmfs_iomap_ops, NULL, 0, NULL, 0);
+	inode_unlock_shared(ino);
+	file_accessed(iocb->ki_filp);
+	return ret;
 }
 
 static ssize_t fdmfs_write_iter(struct kiocb *iocb, struct iov_iter *from)
@@ -45,12 +52,10 @@ ssize_t fdmfs_copy_file_range(struct file *file_in, loff_t pos_in,
 {
 	bool in_is_fdmfs = file_in->f_op == &fdmfs_fops;
 	bool out_is_fdmfs = file_out->f_op == &fdmfs_fops;
-	struct fdmfs_inode *fdmfs_inode = in_is_fdmfs ? file_in->private_data : file_out->private_data;
-	struct fdmfs_sb_info *sbi = fdmfs_inode->sbi;
+	struct fdmfs_inode *inode = in_is_fdmfs ? file_in->private_data : file_out->private_data;
 	struct kiocb kiocb;
 	struct iov_iter iter;
 	struct bio_vec bvec;
-	struct page *page;
 	ssize_t ret;
 
 	pr_info("FDMFS: copy_file_range %zu bytes, pos_in %llu, pos_out %llu, in_is_fdmfs %d, out_is_fdmfs %d\n", size, pos_in, pos_out, in_is_fdmfs, out_is_fdmfs);
@@ -61,8 +66,7 @@ ssize_t fdmfs_copy_file_range(struct file *file_in, loff_t pos_in,
 		init_sync_kiocb(&kiocb, file_in);
 	kiocb.ki_pos = pos_out;
 
-	page = virt_to_page(sbi->fdm_addr);
-	bvec_set_page(&bvec, page, size, 0);
+	bvec_set_virt(&bvec, fdmfs_region_addr(inode), size);
 	iov_iter_bvec(&iter, ITER_DEST, &bvec, 1, size);
 
 	if (in_is_fdmfs)
@@ -175,11 +179,11 @@ err:
 	return ret;
 }
 
-struct file_operations fdmfs_fops = {
+const struct file_operations fdmfs_fops = {
 	.open			= fdmfs_open,
 	.release		= fdmfs_release,
-	.read			= fdmfs_read,
-	.write			= fdmfs_write,
+	// .read			= fdmfs_read,
+	// .write			= fdmfs_write,
 	.read_iter		= fdmfs_read_iter,
 	.write_iter		= fdmfs_write_iter,
 	.copy_file_range	= fdmfs_copy_file_range,

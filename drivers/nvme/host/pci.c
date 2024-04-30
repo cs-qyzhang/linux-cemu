@@ -835,6 +835,49 @@ static blk_status_t nvme_map_metadata(struct nvme_dev *dev, struct request *req,
 	return BLK_STS_OK;
 }
 
+#ifdef CONFIG_NVME_CEMU
+struct nvme_copy_format2 {
+    uint32_t snsid;         // source namespace id
+    uint32_t rsvd;
+    uint64_t slba;
+    uint32_t rsvd2;
+    uint16_t nlb;
+    uint16_t rsvd3 : 15;
+    uint16_t fco   : 1;     // fast copy only
+    uint64_t rsvd4;
+};
+
+struct nvme_memory_copy_cmd {
+    uint8_t     opcode;
+    uint8_t     flags;
+    uint16_t    cid;
+    uint32_t    nsid;
+    uint64_t    len;            // length
+    uint64_t    rsvd4;
+    uint64_t    prp1;           // source range entries
+    uint64_t    prp2;
+    uint64_t    sdaddr;         // starting destination address
+    uint32_t    nr     : 8;     // number of ranges
+    uint32_t    cdft   : 4;     // copy descriptor format type
+    uint32_t    rsvd12 : 20;
+    uint32_t    rsvd13;
+    uint64_t    rsvd14;
+};
+
+static inline int is_cemu_p2p_addr(struct nvme_ctrl *ctrl, dma_addr_t addr)
+{
+	return (addr >= ctrl->cemu_p2p_start) && (addr < ctrl->cemu_p2p_end);
+}
+
+static inline int is_memory_copy_cmnd(struct nvme_dev *dev, struct request *req)
+{
+	if (req->bio == NULL)
+		return 0;
+	struct bio_vec *bv = req->bio->bi_io_vec;
+	return bv && bv->bv_page && is_cemu_p2p_addr(&dev->ctrl, page_to_phys(bv->bv_page));
+}
+#endif
+
 static blk_status_t nvme_prep_rq(struct nvme_dev *dev, struct request *req)
 {
 	struct nvme_iod *iod = blk_mq_rq_to_pdu(req);
@@ -849,9 +892,54 @@ static blk_status_t nvme_prep_rq(struct nvme_dev *dev, struct request *req)
 		return ret;
 
 	if (blk_rq_nr_phys_segments(req)) {
-		ret = nvme_map_data(dev, req, &iod->cmd);
-		if (ret)
-			goto out_free_cmd;
+#ifdef CONFIG_NVME_CEMU
+		if (is_memory_copy_cmnd(dev, req)) {
+			// struct bio_vec *bv = req->bio->bi_io_vec;
+			// printk(KERN_INFO "nvme_prep_rq: CEMU p2p addr detected! "
+			// 	"reqlen %u, bv len %u, bv off %u, bv bi_count %u, bv bi_max_vecs %d\n",
+			// 	req->__data_len, bv->bv_len, bv->bv_offset, req->bio->__bi_cnt.counter, req->bio->bi_max_vecs);
+			// printk(KERN_INFO "bio_iter: idx %d, bi_bvec_done %u, bi_sector %llu, bi_size %u\n", req->bio->bi_iter.bi_idx, req->bio->bi_iter.bi_bvec_done, req->bio->bi_iter.bi_sector, req->bio->bi_iter.bi_size);
+			// printk(KERN_INFO "blk_rq_nr_phs_segments: %d\n", blk_rq_nr_phys_segments(req));
+			struct nvme_copy_format2 *cf = kzalloc(sizeof(struct nvme_copy_format2), GFP_DMA);
+			struct nvme_command *cmd = &iod->cmd;
+			cf->slba = cmd->rw.slba;
+			cf->nlb = cmd->rw.length;
+			cf->snsid = 1;
+
+			// dma map prp
+			struct bio_vec new_bv;
+			bvec_set_virt(&new_bv, cf, sizeof(struct nvme_copy_format2));
+			iod->first_dma = dma_map_bvec(dev->dev, &new_bv, DMA_TO_DEVICE, 0);
+			if (dma_mapping_error(dev->dev, iod->first_dma))
+				return BLK_STS_RESOURCE;
+			iod->dma_len = new_bv.bv_len;
+			cmd->rw.dptr.prp1 = cpu_to_le64(iod->first_dma);
+
+			struct nvme_memory_copy_cmd *copy = (void *)cmd;
+			copy->len = (cf->nlb + 1) * 512;
+			copy->nsid = 2;
+			copy->cdft = 2;
+			copy->nr = 1;
+			copy->opcode = 1; // memory copy
+			copy->sdaddr = 0;
+			copy->rsvd14 = (uintptr_t)cf;// for kfree in nvme_handle_cqe
+		} else {
+			if (req->bio && (req->bio->bi_flags & (1 << BIO_NVME_MEMORY_CMD))) {
+				printk(KERN_INFO "memory read!!!\n");
+				struct bio_vec *bv = req->bio->bi_io_vec;
+				printk(KERN_INFO "nvme_prep_rq: CEMU p2p addr detected! "
+					"reqlen %u, bv len %u, bv off %u, bv bi_count %u, bv bi_max_vecs %d\n",
+					req->__data_len, bv->bv_len, bv->bv_offset, req->bio->__bi_cnt.counter, req->bio->bi_max_vecs);
+				printk(KERN_INFO "bio_iter: idx %d, bi_bvec_done %u, bi_sector %llu, bi_size %u\n", req->bio->bi_iter.bi_idx, req->bio->bi_iter.bi_bvec_done, req->bio->bi_iter.bi_sector, req->bio->bi_iter.bi_size);
+				printk(KERN_INFO "blk_rq_nr_phs_segments: %d\n", blk_rq_nr_phys_segments(req));
+			}
+#endif
+			ret = nvme_map_data(dev, req, &iod->cmd);
+			if (ret)
+				goto out_free_cmd;
+#ifdef CONFIG_NVME_CEMU
+		}
+#endif
 	}
 
 	if (blk_integrity_rq(req)) {
@@ -970,8 +1058,23 @@ static __always_inline void nvme_pci_unmap_rq(struct request *req)
 			       rq_integrity_vec(req)->bv_len, rq_dma_dir(req));
 	}
 
+#ifdef CONFIG_NVME_CEMU
+	struct nvme_command *cmd = nvme_req(req)->cmd;
+	if (cmd->rw.nsid == 2 && cmd->rw.opcode == 1) {
+		// memory copy command
+		struct nvme_iod *iod = blk_mq_rq_to_pdu(req);
+		dma_unmap_page(dev->dev, iod->first_dma, iod->dma_len, DMA_TO_DEVICE);
+		struct nvme_memory_copy_cmd *copy = (void*)nvme_req(req)->cmd;
+		void *kaddr = (void*)copy->rsvd14;
+		kfree(kaddr);
+	} else {
+#endif
 	if (blk_rq_nr_phys_segments(req))
 		nvme_unmap_data(dev, req);
+#ifdef CONFIG_NVME_CEMU
+	}
+#endif
+
 }
 
 static void nvme_pci_complete_rq(struct request *req)

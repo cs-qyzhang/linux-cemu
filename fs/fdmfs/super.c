@@ -9,9 +9,6 @@
 #include "../../drivers/nvme/host/cemu.h"
 
 // file.c
-extern struct file_operations fdmfs_fops;
-extern struct inode_operations fdmfs_inode_ops;
-
 static struct super_operations fdmfs_super_ops = {
 	.statfs		= simple_statfs,
 	.drop_inode	= generic_delete_inode,

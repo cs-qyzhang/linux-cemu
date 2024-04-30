@@ -104,20 +104,22 @@ static void cemu_bdev_submit_bio(struct bio *bio)
 	struct cemu_dev *dev = bio->bi_bdev->bd_disk->private_data;
 
 	printk(KERN_INFO "CEMU CSD submit_bio\n");
+	printk(KERN_INFO "cemu_bdev_submit_bio: len %u, offset %u, sector %llu\n", bio->bi_io_vec->bv_len, bio->bi_io_vec->bv_offset, bio->bi_iter.bi_sector);
 
 	if (dev == NULL) {
 		bio_io_error(bio);
 		return;
 	}
 
-	bio = bio_split_to_limits(bio);
-	if (!bio)
-		return;
-
 	// /* bio could be mergeable after passing to underlayer */
 	// bio->bi_opf &= ~REQ_NOMERGE;
 
+	printk(KERN_INFO "cemu_bdev_submit_bio: opf %d, len %u, sector %llu\n", bio->bi_opf, bio->bi_io_vec->bv_len, bio->bi_iter.bi_sector);
 	bio_set_dev(bio, dev->nvme_bdev);
+	bio->bi_flags |= 1 << BIO_NVME_MEMORY_CMD;
+	bio = bio_split_to_limits(bio);
+	if (!bio)
+		return;
 	submit_bio_noacct(bio);
 }
 
@@ -163,7 +165,7 @@ static int cemu_p2pmem_setup(struct pci_dev *pdev, struct cemu_dev *dev)
 	}
 	printk(KERN_INFO "CEMU CSD dma_map_sg success\n");
 	for (int i = 0; i < nents; i++) {
-		printk(KERN_INFO "CEMU CSD sgl[%d]: dma_address: %llu, length: %u, page_link: %lu\n", i, sgl[i].dma_address, sgl[i].length, sgl[i].page_link);
+		printk(KERN_INFO "CEMU CSD sgl[%d]: dma_address: %p, length: %u, page_link: %lu\n", i, (void*)sgl[i].dma_address, sgl[i].length, sgl[i].page_link);
 		printk(KERN_INFO "CEMU CSD sgl[%d]: offset: %u, dma_flags: %u\n", i, sgl[i].offset, sgl[i].dma_flags);
 	}
 
@@ -225,6 +227,8 @@ int cemu_dev_add(struct pci_dev *pdev, struct nvme_ctrl *ctrl)
 	dev->rq = disk->queue;
 	cemu_dev[dev->minor] = dev;
 	ctrl->cemu_dev = dev;
+	ctrl->cemu_p2p_start = dev->p2p_addr;
+	ctrl->cemu_p2p_end = ctrl->cemu_p2p_start + dev->size;
 
 	printk(KERN_INFO "CEMU cemu_dev_add: add /dev/cemu%d\n", dev->minor);
 	return 0;

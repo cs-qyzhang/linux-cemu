@@ -1,7 +1,6 @@
 #ifndef _FDMFS_H
 #define _FDMFS_H
 
-#include "linux/blk_types.h"
 #include <linux/list.h>
 #include <linux/fs.h>
 
@@ -58,11 +57,24 @@ static inline struct fdmfs_inode *FDMFS_I(struct inode *i)
 	return i->i_private;
 }
 
+static inline void *fdmfs_region_addr(struct fdmfs_inode *inode)
+{
+	struct fdmfs_sb_info *sbi = inode->sbi;
+	struct fdm_region *region = inode->region;
+	return sbi->fdm_addr + region->off;
+}
+
 struct inode *fdmfs_icreate(struct fdmfs_sb_info *sbi, struct mnt_idmap *idmap,
 	const struct inode *dir, umode_t mode, const unsigned char *name);
 void fdmfs_deallocate(struct fdmfs_inode *inode);
 ssize_t fdmfs_copy_file_range(struct file *file_in, loff_t pos_in,
 				     struct file *file_out, loff_t pos_out,
 				     size_t size, unsigned int flags);
+
+extern const struct iomap_ops fdmfs_iomap_ops;
+extern const struct file_operations fdmfs_fops;
+extern const struct inode_operations fdmfs_inode_ops;
+extern const struct inode_operations fdmfs_dir_inode_ops;
+// extern const struct file_operations fdmfs_dir_fops;
 
 #endif // _FDMFS_H

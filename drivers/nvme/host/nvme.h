@@ -400,6 +400,8 @@ struct nvme_ctrl {
 
 #ifdef CONFIG_NVME_CEMU
 	void *cemu_dev;
+	dma_addr_t cemu_p2p_start;
+	dma_addr_t cemu_p2p_end;
 #endif
 };
 
