@@ -16,20 +16,9 @@ static int fdmfs_release(struct inode *inode, struct file *filp) {
 	return 0;
 }
 
-static ssize_t fdmfs_read(struct file *filp, char __user *buf, size_t len, loff_t *ppos) {
-	pr_info("FDMFS: read %zu bytes\n", len);
-	return len;
-}
-
-static ssize_t fdmfs_write(struct file *filp, const char __user *buf, size_t len, loff_t *ppos) {
-	struct inode *inode = file_inode(filp);
-	pr_info("FDMFS: write %zu bytes\n", len);
-	return len;
-}
-
-static ssize_t fdmfs_read_iter(struct kiocb *iocb, struct iov_iter *iter)
+static ssize_t fdmfs_rw_iter(struct kiocb *iocb, struct iov_iter *iter)
 {
-	pr_info("FDMFS: read_iter\n");
+	pr_info("FDMFS: rw_iter\n");
 	struct inode *ino = file_inode(iocb->ki_filp);
 
 	inode_lock_shared(ino);
@@ -38,12 +27,6 @@ static ssize_t fdmfs_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 	inode_unlock_shared(ino);
 	file_accessed(iocb->ki_filp);
 	return ret;
-}
-
-static ssize_t fdmfs_write_iter(struct kiocb *iocb, struct iov_iter *from)
-{
-	pr_info("FDMFS: write_iter\n");
-	return 0;
 }
 
 ssize_t fdmfs_copy_file_range(struct file *file_in, loff_t pos_in,
@@ -66,11 +49,12 @@ ssize_t fdmfs_copy_file_range(struct file *file_in, loff_t pos_in,
 		init_sync_kiocb(&kiocb, file_in);
 	kiocb.ki_pos = pos_out;
 
-	bvec_set_virt(&bvec, fdmfs_region_addr(inode), size);
-	iov_iter_bvec(&iter, ITER_DEST, &bvec, 1, size);
+	bvec_set_virt(&bvec, fdmfs_region_addr(inode) + pos_out, size);
+	unsigned int dir = in_is_fdmfs ? ITER_SOURCE : ITER_DEST;
+	iov_iter_bvec(&iter, dir, &bvec, 1, size);
 
 	if (in_is_fdmfs)
-		ret = call_read_iter(file_out, &kiocb, &iter);
+		ret = call_write_iter(file_out, &kiocb, &iter);
 	else
 		ret = call_read_iter(file_in, &kiocb, &iter);
 	BUG_ON(ret == -EIOCBQUEUED);
@@ -167,7 +151,7 @@ static long fdmfs_fallocate(struct file *filp, int mode,
 	goto err;
 out:
 	list_add(&new_region->list, &sbi->fdm_used);
-	FDMFS_I(inode)->region = region;
+	FDMFS_I(inode)->region = new_region;
 	if (!(mode & FALLOC_FL_KEEP_SIZE)) {
 		i_size_write(inode, length);
 		inode->i_blocks = (length + 511) >> 9;
@@ -184,8 +168,8 @@ const struct file_operations fdmfs_fops = {
 	.release		= fdmfs_release,
 	// .read			= fdmfs_read,
 	// .write			= fdmfs_write,
-	.read_iter		= fdmfs_read_iter,
-	.write_iter		= fdmfs_write_iter,
+	.read_iter		= fdmfs_rw_iter,
+	.write_iter		= fdmfs_rw_iter,
 	.copy_file_range	= fdmfs_copy_file_range,
 	.fallocate		= fdmfs_fallocate,
 	.fsync			= noop_fsync,

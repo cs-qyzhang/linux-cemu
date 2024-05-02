@@ -132,8 +132,6 @@ static int fdmfs_fill_super(struct super_block *sb, void *data, int silent)
 	sb->s_time_gran = 1;
 	// memcpy(&sb->s_uuid, raw_super->uuid, sizeof(raw_super->uuid));
 	sb->s_maxbytes = MAX_LFS_FILESIZE;
-	sb->s_blocksize = 512;
-	sb->s_blocksize_bits = 9;
 	sb->s_fs_info = sbi;
 
 	// alloc root inode
@@ -157,11 +155,15 @@ static struct dentry *fdmfs_mount(struct file_system_type *fs_type, int flags,
 	return mount_bdev(fs_type, flags, dev_name, data, fdmfs_fill_super);
 }
 
+static void fdmfs_kill_sb(struct super_block *sb)
+{
+}
+
 static struct file_system_type fdmfs_type = {
 	.owner		= THIS_MODULE,
 	.name		= "fdmfs",
 	.mount		= fdmfs_mount,
-	.kill_sb	= kill_litter_super,
+	.kill_sb	= fdmfs_kill_sb,
 	.fs_flags	= FS_REQUIRES_DEV,
 };
 
