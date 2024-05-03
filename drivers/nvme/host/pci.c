@@ -898,17 +898,17 @@ static inline int is_cemu_p2p_addr(struct nvme_ctrl *ctrl, dma_addr_t addr)
 	return (addr >= ctrl->cemu_p2p_start) && (addr < ctrl->cemu_p2p_end);
 }
 
-static inline int is_memory_copy_cmnd(struct nvme_dev *dev, struct request *req)
+static inline int is_memory_copy_cmnd(struct nvme_dev *dev, struct request *req, struct nvme_command *cmd)
 {
-	if (req->bio == NULL)
-		return 0;
-	struct bio_vec *bv = req->bio->bi_io_vec;
-	return bv && bv->bv_page && is_cemu_p2p_addr(&dev->ctrl, page_to_phys(bv->bv_page));
+	return (cmd->rw.nsid == 2 && cmd->rw.opcode == 1) ||
+		(req->bio && req->bio->bi_io_vec &&
+			is_cemu_p2p_addr(&dev->ctrl,
+				page_to_phys(req->bio->bi_io_vec->bv_page)));
 }
 
 static inline int is_memory_rw_cmnd(struct nvme_dev *dev, struct request *req)
 {
-	return req->bio && (req->bio->bi_flags & (1 << BIO_NVME_MEMORY_CMD));
+	return req->bio && bio_flagged(req->bio, BIO_NVME_MEMORY_CMD);
 }
 
 static uintptr_t cemu_p2p_offset(struct nvme_dev *dev, struct request *req)
@@ -934,7 +934,7 @@ static blk_status_t nvme_prep_rq(struct nvme_dev *dev, struct request *req)
 	if (blk_rq_nr_phys_segments(req)) {
 #ifdef CONFIG_NVME_CEMU
 		struct nvme_command *cmd = &iod->cmd;
-		int is_memory_copy = is_memory_copy_cmnd(dev, req);
+		int is_memory_copy = is_memory_copy_cmnd(dev, req, cmd);
 		int is_memory_rw = is_memory_rw_cmnd(dev, req);
 		if (is_memory_copy) {
 			union nvme_copy_format *cf = kzalloc(sizeof(union nvme_copy_format), GFP_DMA);

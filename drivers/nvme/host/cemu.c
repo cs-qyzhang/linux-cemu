@@ -103,7 +103,6 @@ static void cemu_bdev_submit_bio(struct bio *bio)
 {
 	struct cemu_dev *dev = bio->bi_bdev->bd_disk->private_data;
 
-	printk(KERN_INFO "CEMU CSD submit_bio\n");
 	printk(KERN_INFO "cemu_bdev_submit_bio: len %u, offset %u, sector %llu\n", bio->bi_io_vec->bv_len, bio->bi_io_vec->bv_offset, bio->bi_iter.bi_sector);
 
 	if (dev == NULL) {
@@ -114,9 +113,8 @@ static void cemu_bdev_submit_bio(struct bio *bio)
 	// /* bio could be mergeable after passing to underlayer */
 	// bio->bi_opf &= ~REQ_NOMERGE;
 
-	printk(KERN_INFO "cemu_bdev_submit_bio: opf %d, len %u, sector %llu\n", bio->bi_opf, bio->bi_io_vec->bv_len, bio->bi_iter.bi_sector);
 	bio_set_dev(bio, dev->nvme_bdev);
-	bio->bi_flags |= 1 << BIO_NVME_MEMORY_CMD;
+	bio_set_flag(bio, BIO_NVME_MEMORY_CMD);
 	bio = bio_split_to_limits(bio);
 	if (!bio)
 		return;
