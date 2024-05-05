@@ -17,6 +17,7 @@ struct cemu_dev {
 	struct cdev cdev;
 	struct gendisk *disk;
 	struct request_queue *rq;
+	struct request_queue *admin_q;
 	struct device *dev;
 	struct block_device *nvme_bdev;
 	struct pci_dev *pdev;
@@ -25,6 +26,7 @@ struct cemu_dev {
 	int minor;
 	size_t size;
 	dma_addr_t p2p_addr;
+	struct kobject *sys_fs;
 };
 
 static int cemu_major;
@@ -92,11 +94,42 @@ static void cemu_bdev_release(struct gendisk *disk)
 	printk(KERN_INFO "CEMU CSD cemu_blkdev_release\n");
 }
 
-static int cemu_bdev_ioctl(struct block_device *bdev, fmode_t mode,
-	unsigned int cmd, unsigned long arg)
+struct cemu_bio {
+	atomic_t		ref;
+	unsigned		flags;
+	int			error;
+	size_t			done_before;
+	bool			wait_for_completion;
+
+	union {
+		/* used during submission and for synchronous completion: */
+		struct {
+			struct iov_iter		*iter;
+			struct task_struct	*waiter;
+		} submit;
+
+		/* used for aio completion: */
+		struct {
+			struct work_struct	work;
+		} aio;
+	};
+};
+
+static void cemu_bio_end_io(struct bio *bio)
 {
-	printk(KERN_INFO "CEMU CSD cemu_blkdev_ioctl\n");
-	return 0;
+	struct cemu_bio *cio = bio->bi_private;
+	if (!atomic_dec_and_test(&cio->ref))
+		goto release_bio;
+	if (cio->wait_for_completion) {
+		struct task_struct *waiter = cio->submit.waiter;
+
+		WRITE_ONCE(cio->submit.waiter, NULL);
+		blk_wake_io_task(waiter);
+		goto release_bio;
+	}
+release_bio:
+	bio_release_pages(bio, false);
+	bio_put(bio);
 }
 
 static void cemu_bdev_submit_bio(struct bio *bio)
@@ -121,13 +154,85 @@ static void cemu_bdev_submit_bio(struct bio *bio)
 	submit_bio_noacct(bio);
 }
 
+enum {
+	IOCTL_CEMU_DOWNLOAD,
+	IOCTL_CEMU_ACTIVATE,
+	IOCTL_CEMU_EXECUTE,
+};
+
+struct cemu_download {
+	uint64_t addr;
+	uint64_t size;
+};
+
+static int cemu_bdev_ioctl(struct block_device *bdev, blk_mode_t mode,
+		unsigned ioctl_cmd, unsigned long arg)
+{
+	struct cemu_dev *dev = bdev->bd_disk->private_data;
+
+	printk(KERN_INFO "cemu_bdev_ioctl\n");
+
+	struct cemu_download download;
+	if (copy_from_user(&download, (void *)arg, sizeof(download)))
+		return -EFAULT;
+
+	struct bio *bio;
+	struct iov_iter iter;
+	struct cemu_bio *cio = kzalloc(sizeof(*cio), GFP_KERNEL);
+	cio->submit.waiter = current;
+	cio->submit.iter = &iter;
+	blk_opf_t bio_opf;
+	iov_iter_ubuf(&iter, ITER_SOURCE, (void __user *)download.addr, download.size);
+
+	loff_t pos = 0;
+	size_t count = iov_iter_count(&iter);
+	printk(KERN_INFO "cemu_bdev_ioctl: addr %llx, size %llx, iov_iter_count %lu\n", download.addr, download.size, count);
+	size_t copied = 0;
+	int ret = 0;
+
+	int nr_pages = bio_iov_vecs_to_alloc(&iter, BIO_MAX_VECS);
+	// bio_opf = REQ_OP_WRITE;
+	bio_opf = REQ_OP_LOAD_PROGRAM;
+	do {
+		bio = bio_alloc(dev->disk->part0, nr_pages, bio_opf, GFP_KERNEL);
+		bio->bi_iter.bi_sector = 0;
+		bio->bi_ioprio = 0;
+		bio->bi_private = cio;
+		bio->bi_end_io = cemu_bio_end_io;
+		ret = bio_iov_iter_get_pages(bio, &iter);
+		if (unlikely(ret)) {
+			/*
+			 * We have to stop part way through an IO. We must fall
+			 * through to the sub-block tail zeroing here, otherwise
+			 * this short IO may expose stale data in the tail of
+			 * the block we haven't written data to.
+			 */
+			bio_put(bio);
+			goto out;
+		}
+
+		size_t n = bio->bi_iter.bi_size;
+		printk(KERN_INFO "cemu_bdev_ioctl: bio size %lu\n", n);
+		copied += n;
+		nr_pages = bio_iov_vecs_to_alloc(&iter, BIO_MAX_VECS);
+		atomic_inc(&cio->ref);
+		submit_bio(bio);
+		pos += n;
+	} while (nr_pages);
+
+out:
+	if (copied)
+		return copied;
+	return ret;
+}
+
 const struct block_device_operations cemu_bdev_ops =
 {
 	.owner		= THIS_MODULE,
 	.submit_bio	= cemu_bdev_submit_bio,
 	.open		= cemu_bdev_open,
 	.release	= cemu_bdev_release,
-	.ioctl		= cemu_bdev_ioctl,
+	.ioctl 		= cemu_bdev_ioctl,
 };
 
 static int cemu_p2pmem_setup(struct pci_dev *pdev, struct cemu_dev *dev)
@@ -194,6 +299,7 @@ int cemu_dev_add(struct pci_dev *pdev, struct nvme_ctrl *ctrl)
 		printk(KERN_ERR "CEMU cemu_dev_add: nvme_find_get_ns failed\n");
 	}
 	dev->nvme_bdev = ns->disk->part0;
+	dev->admin_q = ctrl->admin_q;
 
 	cemu_p2pmem_setup(pdev, dev);
 
@@ -210,6 +316,8 @@ int cemu_dev_add(struct pci_dev *pdev, struct nvme_ctrl *ctrl)
 	disk->private_data = dev;
 	sprintf(disk->disk_name, "cemu%d", dev->minor);
 	blk_set_stacking_limits(&disk->queue->limits);
+	disk->queue->limits.logical_block_size = 1;	// required for load program, since program size is arbitrary
+	disk->queue->limits.physical_block_size = 1;
 	set_capacity(disk, dev->size / SECTOR_SIZE);
 	// blk_queue_write_cache(disk->queue, true, true);
 
@@ -228,6 +336,11 @@ int cemu_dev_add(struct pci_dev *pdev, struct nvme_ctrl *ctrl)
 	ctrl->cemu_p2p_start = dev->p2p_addr;
 	ctrl->cemu_p2p_end = ctrl->cemu_p2p_start + dev->size;
 
+	// create /sys/fs for compute namespace
+	dev->sys_fs = kobject_create_and_add(disk->disk_name, fs_kobj);
+	if (!dev->sys_fs)
+		return -ENOMEM;
+
 	printk(KERN_INFO "CEMU cemu_dev_add: add /dev/cemu%d\n", dev->minor);
 	return 0;
 }
@@ -241,6 +354,7 @@ void cemu_dev_remove(struct pci_dev *pdev, struct nvme_ctrl *ctrl)
 	cemu_dev[dev->minor] = NULL;
 	dma_unmap_sg(ctrl->dev, dev->dma_sgl, dev->sgl_nents, DMA_BIDIRECTIONAL);
 	pci_p2pmem_free_sgl(pdev, dev->dma_sgl);
+	kobject_put(dev->sys_fs);
 	kfree(dev);
 }
 EXPORT_SYMBOL_GPL(cemu_dev_remove);

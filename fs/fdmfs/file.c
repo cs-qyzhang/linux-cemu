@@ -18,11 +18,14 @@ static int fdmfs_release(struct inode *inode, struct file *filp) {
 
 static ssize_t fdmfs_rw_iter(struct kiocb *iocb, struct iov_iter *iter)
 {
-	pr_info("FDMFS: rw_iter\n");
+	pr_info("FDMFS: rw_iter, size %lu, off %llu\n", iov_iter_count(iter), iocb->ki_pos);
+	if (iocb->ki_pos % 512) {
+		pr_err("FDMFS: rw_iter require 512-aligned offset!\n");
+		return -EINVAL;
+	}
 	struct inode *ino = file_inode(iocb->ki_filp);
 
 	inode_lock_shared(ino);
-	// struct bio *bio = bio_alloc(sbi->cemu_bdev, nr_vecs, opf, GFP_KERNEL);
 	ssize_t ret = iomap_dio_rw(iocb, iter, &fdmfs_iomap_ops, NULL, 0, NULL, 0);
 	inode_unlock_shared(ino);
 	file_accessed(iocb->ki_filp);
@@ -59,6 +62,53 @@ ssize_t fdmfs_copy_file_range(struct file *file_in, loff_t pos_in,
 		ret = call_read_iter(file_in, &kiocb, &iter);
 	BUG_ON(ret == -EIOCBQUEUED);
 	return ret;
+}
+
+enum {
+	IOCTL_CEMU_DOWNLOAD,
+	IOCTL_CEMU_ACTIVATE,
+	IOCTL_CEMU_EXECUTE,
+};
+
+struct cemu_download {
+	uint64_t addr;
+	uint64_t size;
+};
+
+static long fdmfs_ioctl(struct file *file, unsigned int cmd,
+			unsigned long arg)
+{
+	printk(KERN_INFO "FDMFS: fdmfs_ioctl, cmd %d, arg %lx\n", cmd, arg);
+
+	struct cemu_download download;
+	if (copy_from_user(&download, (void *)arg, sizeof(download)))
+		return -EFAULT;
+	void *user_code;
+	struct iov_iter iter;
+	struct kiocb kiocb;
+	printk(KERN_INFO "FDMFS: fdmfs_ioctl, addr %llx, size %llx\n", download.addr, download.size);
+
+	init_sync_kiocb(&kiocb, file);
+	// kiocb.ki_flags |= IOCB_LOAD_PROGRAM;
+	iov_iter_ubuf(&iter, ITER_SOURCE, (void __user *)download.addr, download.size);
+	int ret = call_write_iter(file, &kiocb, &iter);
+	BUG_ON(ret == -EIOCBQUEUED);
+	return ret;
+
+	blk_opf_t op = REQ_SYNC | REQ_IDLE | REQ_OP_WRITE;
+	switch (cmd) {
+	case IOCTL_CEMU_DOWNLOAD:
+		user_code = (void *)arg;
+		break;
+	case IOCTL_CEMU_ACTIVATE:
+		break;
+	case IOCTL_CEMU_EXECUTE:
+		break;
+	default:
+		printk(KERN_ERR "FDMFS fdmfs_ioctl: unknown ioctl cmd %d!!!\n", cmd);
+		return -ENOTTY;
+	}
+	return 0;
 }
 
 void fdmfs_deallocate(struct fdmfs_inode *inode)
@@ -107,7 +157,17 @@ static long fdmfs_fallocate(struct file *filp, int mode,
 		mode, offset, length);
 
 	if (mode != 0) {
-		pr_err("FDMFS: fallocate doesn't support mode\n");
+		pr_err("FDMFS: fallocate doesn't support mode!\n");
+		return -EINVAL;
+	}
+
+	if (offset != 0) {
+		pr_err("FDMFS: fallocate doesn't support offset!\n");
+		return -EINVAL;
+	}
+
+	if (length % 512) {
+		pr_err("FDMFS: fallocate require 512-aligned length!\n");
 		return -EINVAL;
 	}
 
@@ -154,7 +214,7 @@ out:
 	FDMFS_I(inode)->region = new_region;
 	if (!(mode & FALLOC_FL_KEEP_SIZE)) {
 		i_size_write(inode, length);
-		inode->i_blocks = (length + 511) >> 9;
+		inode->i_blocks = (length+(1<<inode->i_blkbits)-1) >> inode->i_blkbits;
 	}
 	inode_set_ctime_current(inode);
 	pr_info("FDMFS: fallocate success, inode size %lld\n", filp->f_inode->i_size);
@@ -173,5 +233,6 @@ const struct file_operations fdmfs_fops = {
 	.copy_file_range	= fdmfs_copy_file_range,
 	.fallocate		= fdmfs_fallocate,
 	.fsync			= noop_fsync,
+	.unlocked_ioctl		= fdmfs_ioctl,
 	.llseek			= generic_file_llseek,
 };

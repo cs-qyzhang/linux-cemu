@@ -980,7 +980,7 @@ static blk_status_t nvme_prep_rq(struct nvme_dev *dev, struct request *req)
 			copy->sdaddr = cemu_p2p_offset(dev, req);
 			copy->rsvd14 = (uintptr_t)cf;// for kfree in nvme_handle_cqe
 		} else {
-			if (is_memory_rw) {
+			if (is_memory_rw && cmd->rw.nsid != 3) {
 				// struct bio_vec *bv = req->bio->bi_io_vec;
 				// printk(KERN_INFO "nvme_prep_rq: CEMU p2p addr detected! "
 				// 	"reqlen %u, bv len %u, bv off %u, bv bi_count %u, bv bi_max_vecs %d\n",
@@ -989,7 +989,7 @@ static blk_status_t nvme_prep_rq(struct nvme_dev *dev, struct request *req)
 				// printk(KERN_INFO "blk_rq_nr_phs_segments: %d\n", blk_rq_nr_phys_segments(req));
 				struct nvme_memory_rw_cmd *rw = (void *)cmd;
 				rw->sb = cmd->rw.slba * 512;
-				rw->length = (cmd->rw.length + 1) * 512;
+				rw->length = blk_rq_bytes(req);
 				rw->nsid = 2;
 				if (op_is_write(req_op(req)))
 					rw->opcode = 5;	// memory write

@@ -1784,6 +1784,30 @@ struct streams_directive_params {
 	__u8	rsvd2[6];
 };
 
+struct nvme_load_program_cmd {
+	__u8	opcode;
+	__u8	flags;
+	__u16	cid;
+	__u32	nsid;
+	__u8	jit       : 1;  // 1 if jit, CEMU only
+	__u8	upload    : 1;  // 1 if upload to arm, CEMU only
+	__u8	rsvd_ctrl : 6;
+	__u16	runtime_scale;  // CEMU only
+	__u32	runtime;        // runtime in ns when type is phantom, CEMU only
+	__u32	rsvd;
+	__u64	prp1;           // program buffer
+	__u64	prp2;
+	__u32	pind   : 16;    // program index
+	__u32	ptype  : 8;     // program type
+	__u32	sel    : 1;     // 0 for load 1 for unload
+	__u32	pit    : 3;     // program identifier type, 0 is not used, 1 is PUID (program unique identifier)
+	__u32	rsvd10 : 4;
+	__u32	psize;          // total program size in bytes
+	__u64	pid;            // program identifier, PUID when pit is 1
+	__u32	numb;           // number of bytes to transfer
+	__u32	loff;           // load offset
+};
+
 struct nvme_command {
 	union {
 		struct nvme_common_command common;
@@ -1810,6 +1834,7 @@ struct nvme_command {
 		struct nvmf_auth_receive_command auth_receive;
 		struct nvme_dbbuf dbbuf;
 		struct nvme_directive_cmd directive;
+		struct nvme_load_program_cmd load;
 	};
 };
 

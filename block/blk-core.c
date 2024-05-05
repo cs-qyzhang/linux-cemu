@@ -817,6 +817,8 @@ void submit_bio_noacct(struct bio *bio)
 		 * requests.
 		 */
 		fallthrough;
+	case REQ_OP_LOAD_PROGRAM:
+		break;
 	default:
 		goto not_supported;
 	}

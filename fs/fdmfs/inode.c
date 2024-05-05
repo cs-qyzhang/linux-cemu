@@ -54,6 +54,7 @@ struct inode *fdmfs_icreate(struct fdmfs_sb_info *sbi, struct mnt_idmap *idmap,
 	inode->i_ino = sbi->ino_count++;
 	inode->i_blocks = 0;
 	inode->i_private = fdmfs_inode;
+	inode->i_blkbits = 1;
 	inode_init_owner(idmap, inode, dir, mode);
 	simple_inode_init_ts(inode);
 

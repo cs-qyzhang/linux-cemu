@@ -1009,6 +1009,32 @@ void nvme_cleanup_cmd(struct request *req)
 }
 EXPORT_SYMBOL_GPL(nvme_cleanup_cmd);
 
+static blk_status_t nvme_setup_load(struct nvme_ns *ns, struct request *req,
+	struct nvme_command *cmnd)
+{
+	cmnd->load.nsid = 3;
+	cmnd->load.opcode = 0x22;
+	cmnd->load.loff = req->bio->bi_iter.bi_bvec_done;
+	cmnd->load.numb = blk_rq_bytes(req);
+	cmnd->load.pid = 1;
+	cmnd->load.pind = 1;
+	cmnd->load.sel = 0;
+	cmnd->load.psize = req->bio->bi_iter.bi_size + req->bio->bi_iter.bi_bvec_done;
+	cmnd->load.ptype = 2;
+	cmnd->load.prp1 = 0;
+	cmnd->load.prp2 = 0;
+	cmnd->load.upload = 1;
+	cmnd->load.cid = 0;
+	cmnd->load.flags = 0;
+	cmnd->load.jit = 1;
+	cmnd->load.runtime = 0;
+	cmnd->load.runtime_scale = 0;
+	cmnd->load.rsvd = 0;
+	cmnd->load.rsvd10 = 0;
+	cmnd->load.rsvd_ctrl = 0;
+	return 0;
+}
+
 blk_status_t nvme_setup_cmd(struct nvme_ns *ns, struct request *req)
 {
 	struct nvme_command *cmd = nvme_req(req)->cmd;
@@ -1052,6 +1078,9 @@ blk_status_t nvme_setup_cmd(struct nvme_ns *ns, struct request *req)
 		break;
 	case REQ_OP_ZONE_APPEND:
 		ret = nvme_setup_rw(ns, req, cmd, nvme_cmd_zone_append);
+		break;
+	case REQ_OP_LOAD_PROGRAM:
+		ret = nvme_setup_load(ns, req, cmd);
 		break;
 	default:
 		WARN_ON_ONCE(1);
