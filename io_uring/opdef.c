@@ -35,6 +35,7 @@
 #include "rw.h"
 #include "waitid.h"
 #include "futex.h"
+#include "copy_file_range.h"
 
 static int io_no_issue(struct io_kiocb *req, unsigned int issue_flags)
 {
@@ -474,6 +475,14 @@ const struct io_issue_def io_issue_defs[] = {
 		.prep			= io_install_fixed_fd_prep,
 		.issue			= io_install_fixed_fd,
 	},
+	[IORING_OP_COPY_FILE_RANGE] = {
+		.needs_file		= 1,
+		.hash_reg_file		= 1,
+		.unbound_nonreg_file	= 1,
+		.audit_skip		= 1,
+		.prep			= io_copy_file_range_prep,
+		.issue			= io_copy_file_range,
+	},
 };
 
 const struct io_cold_def io_cold_defs[] = {
@@ -711,6 +720,9 @@ const struct io_cold_def io_cold_defs[] = {
 	},
 	[IORING_OP_FIXED_FD_INSTALL] = {
 		.name			= "FIXED_FD_INSTALL",
+	},
+	[IORING_OP_COPY_FILE_RANGE] = {
+		.name			= "COPY_FILE_RANGE",
 	},
 };
 
