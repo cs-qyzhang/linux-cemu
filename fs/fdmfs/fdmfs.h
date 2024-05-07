@@ -3,6 +3,7 @@
 
 #include <linux/list.h>
 #include <linux/fs.h>
+#include <linux/nvme.h>
 
 #define FDMFS_BLKSIZE		512
 #define FDMFS_SUPER_OFFSET	1024
@@ -70,6 +71,7 @@ void fdmfs_deallocate(struct fdmfs_inode *inode);
 ssize_t fdmfs_copy_file_range(struct file *file_in, loff_t pos_in,
 				     struct file *file_out, loff_t pos_out,
 				     size_t size, unsigned int flags);
+int fdmfs_get_memory_range(struct file *filp, struct nvme_memory_range *mr);
 
 extern const struct iomap_ops fdmfs_iomap_ops;
 extern const struct file_operations fdmfs_fops;

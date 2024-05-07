@@ -1789,12 +1789,12 @@ struct nvme_load_program_cmd {
 	__u8	flags;
 	__u16	cid;
 	__u32	nsid;
-	__u8	jit       : 1;  // 1 if jit, CEMU only
-	__u8	upload    : 1;  // 1 if upload to arm, CEMU only
-	__u8	rsvd_ctrl : 6;
+	__u16	jit       : 1;  // 1 if jit, CEMU only
+	__u16	upload    : 1;  // 1 if upload to arm, CEMU only
+	__u16	rsvd_ctrl : 14;
 	__u16	runtime_scale;  // CEMU only
 	__u32	runtime;        // runtime in ns when type is phantom, CEMU only
-	__u32	rsvd;
+	__u64	rsvd;
 	__u64	prp1;           // program buffer
 	__u64	prp2;
 	__u32	pind   : 16;    // program index
@@ -1806,6 +1806,63 @@ struct nvme_load_program_cmd {
 	__u64	pid;            // program identifier, PUID when pit is 1
 	__u32	numb;           // number of bytes to transfer
 	__u32	loff;           // load offset
+};
+
+struct nvme_program_activation_cmd {
+	__u8	opcode;
+	__u8	flags;
+	__u16	cid;
+	__u32	nsid;
+	__u32	force;          // 1 to force downloading bitstream to FPGA, CEMU only
+	__u32	rsvd[3];
+	__u64	prp1;           // program buffer
+	__u64	prp2;
+	__u32	pind   : 16;
+	__u32	sel    : 4;     // 0 for deactivate, 1 for activate
+	__u32	rsvd10 : 12;
+	__u32	runtime;        // runtime in ns when type is phantom, CEMU only
+	__u32	rsvd12[4];
+};
+
+struct nvme_program_execute_cmd {
+	__u8	opcode;
+	__u8	flags;
+	__u16	cid;
+	__u32	nsid;
+	__u16	pind;		// program index
+	__u16	rsid;		// memory range set id
+	__u32	numr;		// number of memory ranges
+	__u32	dlen;		// data buffer len
+	__u32	group;		// CEMU specific, scheduling group
+	__u64	prp1;		// data buffer
+	__u64	prp2;
+	__u64	cparam1;	// parameter data
+	__u64	cparam2;	// parameter data
+	__u64	rsvd14;
+};
+
+struct nvme_memory_range_set_manage_cmd {
+	__u8	opcode;
+	__u8	flags;
+	__u16	cid;
+	__u32	nsid;
+	__u32	rsvd[4];
+	__u64	prp1;		// data buffer
+	__u64	prp2;
+	__u16	sel    : 4;	// type of management operation
+	__u16	rsvd10 : 12;
+	__u16	rsid;		// memory range set identifier
+	__u8	numr;		// number of memory ranges
+	__u8	rsvd11a;	// number of memory ranges
+	__u16	rsvd11b;
+	__u32	rsvd12[4];
+};
+
+struct nvme_memory_range {
+	__u32 nsid;		// namespace id
+	__u32 len;		// length
+	__u64 sb;		// starting bytes
+	__u64 rsvd[2];
 };
 
 struct nvme_command {
@@ -1835,6 +1892,9 @@ struct nvme_command {
 		struct nvme_dbbuf dbbuf;
 		struct nvme_directive_cmd directive;
 		struct nvme_load_program_cmd load;
+		struct nvme_program_activation_cmd activation;
+		struct nvme_program_execute_cmd execute;
+		struct nvme_memory_range_set_manage_cmd mrs_manage;
 	};
 };
 

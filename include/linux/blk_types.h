@@ -399,6 +399,7 @@ enum req_op {
 #ifdef CONFIG_NVME_CEMU
 	/* nvme memory ns read/write */
 	REQ_OP_LOAD_PROGRAM	= (__force blk_opf_t)16,
+	REQ_OP_PROGRAM_EXECUTE	= (__force blk_opf_t)17,
 #endif
 
 	/* Driver private requests */

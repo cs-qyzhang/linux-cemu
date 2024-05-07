@@ -23,6 +23,7 @@
 #include <linux/ratelimit.h>
 #include <asm/unaligned.h>
 
+#include "cemu.h"
 #include "nvme.h"
 #include "fabrics.h"
 #include <linux/nvme-auth.h>
@@ -1012,26 +1013,46 @@ EXPORT_SYMBOL_GPL(nvme_cleanup_cmd);
 static blk_status_t nvme_setup_load(struct nvme_ns *ns, struct request *req,
 	struct nvme_command *cmnd)
 {
+	struct cemu_bio *cio = req->bio->bi_private;
 	cmnd->load.nsid = 3;
 	cmnd->load.opcode = 0x22;
 	cmnd->load.loff = req->bio->bi_iter.bi_bvec_done;
 	cmnd->load.numb = blk_rq_bytes(req);
-	cmnd->load.pid = 1;
-	cmnd->load.pind = 1;
-	cmnd->load.sel = 0;
-	cmnd->load.psize = req->bio->bi_iter.bi_size + req->bio->bi_iter.bi_bvec_done;
-	cmnd->load.ptype = 2;
+	cmnd->load.psize = cio->psize;
+	cmnd->load.pind = cio->pind;
+	cmnd->load.ptype = cio->ptype;
+	cmnd->load.sel = cio->sel;
+	cmnd->load.jit = cio->jit;
+	cmnd->load.runtime = cio->runtime;
+	cmnd->load.runtime_scale = cio->runtime_scale;
+	cmnd->load.pid = 0;
 	cmnd->load.prp1 = 0;
 	cmnd->load.prp2 = 0;
 	cmnd->load.upload = 1;
 	cmnd->load.cid = 0;
 	cmnd->load.flags = 0;
-	cmnd->load.jit = 1;
-	cmnd->load.runtime = 0;
-	cmnd->load.runtime_scale = 0;
 	cmnd->load.rsvd = 0;
 	cmnd->load.rsvd10 = 0;
 	cmnd->load.rsvd_ctrl = 0;
+	return 0;
+}
+
+static blk_status_t nvme_setup_execute(struct nvme_ns *ns, struct request *req,
+	struct nvme_command *cmnd)
+{
+	struct cemu_bio *cio = req->bio->bi_private;
+	cmnd->execute.nsid = 3;
+	cmnd->execute.opcode = 0x01;
+	cmnd->execute.cparam1 = 0;
+	cmnd->execute.cparam2 = 0;
+	cmnd->execute.pind = cio->pind;
+	cmnd->execute.rsid = 0;
+	cmnd->execute.numr = 0;
+	cmnd->execute.dlen = 0;
+	cmnd->execute.flags = 0;
+	cmnd->execute.prp1 = 0;
+	cmnd->execute.prp2 = 0;
+	cmnd->execute.rsvd14 = 0;
 	return 0;
 }
 
@@ -1081,6 +1102,9 @@ blk_status_t nvme_setup_cmd(struct nvme_ns *ns, struct request *req)
 		break;
 	case REQ_OP_LOAD_PROGRAM:
 		ret = nvme_setup_load(ns, req, cmd);
+		break;
+	case REQ_OP_PROGRAM_EXECUTE:
+		ret = nvme_setup_execute(ns, req, cmd);
 		break;
 	default:
 		WARN_ON_ONCE(1);

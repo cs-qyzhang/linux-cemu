@@ -64,53 +64,6 @@ ssize_t fdmfs_copy_file_range(struct file *file_in, loff_t pos_in,
 	return ret;
 }
 
-enum {
-	IOCTL_CEMU_DOWNLOAD,
-	IOCTL_CEMU_ACTIVATE,
-	IOCTL_CEMU_EXECUTE,
-};
-
-struct cemu_download {
-	uint64_t addr;
-	uint64_t size;
-};
-
-static long fdmfs_ioctl(struct file *file, unsigned int cmd,
-			unsigned long arg)
-{
-	printk(KERN_INFO "FDMFS: fdmfs_ioctl, cmd %d, arg %lx\n", cmd, arg);
-
-	struct cemu_download download;
-	if (copy_from_user(&download, (void *)arg, sizeof(download)))
-		return -EFAULT;
-	void *user_code;
-	struct iov_iter iter;
-	struct kiocb kiocb;
-	printk(KERN_INFO "FDMFS: fdmfs_ioctl, addr %llx, size %llx\n", download.addr, download.size);
-
-	init_sync_kiocb(&kiocb, file);
-	// kiocb.ki_flags |= IOCB_LOAD_PROGRAM;
-	iov_iter_ubuf(&iter, ITER_SOURCE, (void __user *)download.addr, download.size);
-	int ret = call_write_iter(file, &kiocb, &iter);
-	BUG_ON(ret == -EIOCBQUEUED);
-	return ret;
-
-	blk_opf_t op = REQ_SYNC | REQ_IDLE | REQ_OP_WRITE;
-	switch (cmd) {
-	case IOCTL_CEMU_DOWNLOAD:
-		user_code = (void *)arg;
-		break;
-	case IOCTL_CEMU_ACTIVATE:
-		break;
-	case IOCTL_CEMU_EXECUTE:
-		break;
-	default:
-		printk(KERN_ERR "FDMFS fdmfs_ioctl: unknown ioctl cmd %d!!!\n", cmd);
-		return -ENOTTY;
-	}
-	return 0;
-}
-
 void fdmfs_deallocate(struct fdmfs_inode *inode)
 {
 	struct fdmfs_sb_info *sbi = inode->sbi;
@@ -223,16 +176,28 @@ err:
 	return ret;
 }
 
+int fdmfs_get_memory_range(struct file *filp, struct nvme_memory_range *mr)
+{
+	struct fdmfs_inode *fdmfs_inode = filp->private_data;
+	struct fdm_region *region = fdmfs_inode->region;
+
+	if (region == NULL)
+		return -EINVAL;
+
+	mr->nsid = 2;
+	mr->len = region->size;
+	mr->sb = region->off;
+	return 0;
+}
+EXPORT_SYMBOL_GPL(fdmfs_get_memory_range);
+
 const struct file_operations fdmfs_fops = {
 	.open			= fdmfs_open,
 	.release		= fdmfs_release,
-	// .read			= fdmfs_read,
-	// .write			= fdmfs_write,
 	.read_iter		= fdmfs_rw_iter,
 	.write_iter		= fdmfs_rw_iter,
 	.copy_file_range	= fdmfs_copy_file_range,
 	.fallocate		= fdmfs_fallocate,
 	.fsync			= noop_fsync,
-	.unlocked_ioctl		= fdmfs_ioctl,
 	.llseek			= generic_file_llseek,
 };
