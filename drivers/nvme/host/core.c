@@ -1028,6 +1028,7 @@ static blk_status_t nvme_setup_load(struct nvme_ns *ns, struct request *req,
 	cmnd->load.pid = 0;
 	cmnd->load.prp1 = 0;
 	cmnd->load.prp2 = 0;
+	cmnd->load.indirect = cio->indirect;
 	cmnd->load.upload = 1;
 	cmnd->load.cid = 0;
 	cmnd->load.flags = 0;

@@ -459,7 +459,8 @@ static int nvme_uring_cmd_io(struct nvme_ctrl *ctrl, struct nvme_ns *ns,
 
 	c.common.cdw2[0] = cpu_to_le32(READ_ONCE(cmd->cdw2));
 	c.common.cdw2[1] = cpu_to_le32(READ_ONCE(cmd->cdw3));
-	c.common.metadata = 0;
+	if (c.common.nsid == 3)
+		c.common.metadata = cpu_to_le32(READ_ONCE(cmd->metadata));
 	c.common.dptr.prp1 = c.common.dptr.prp2 = 0;
 	c.common.cdw10 = cpu_to_le32(READ_ONCE(cmd->cdw10));
 	c.common.cdw11 = cpu_to_le32(READ_ONCE(cmd->cdw11));
@@ -471,7 +472,7 @@ static int nvme_uring_cmd_io(struct nvme_ctrl *ctrl, struct nvme_ns *ns,
 	if (!nvme_cmd_allowed(ns, &c, 0, ioucmd->file->f_mode & FMODE_WRITE))
 		return -EACCES;
 
-	d.metadata = READ_ONCE(cmd->metadata);
+	d.metadata = c.common.nsid == 3 ? 0 : READ_ONCE(cmd->metadata);
 	d.addr = READ_ONCE(cmd->addr);
 	d.data_len = READ_ONCE(cmd->data_len);
 	d.metadata_len = READ_ONCE(cmd->metadata_len);

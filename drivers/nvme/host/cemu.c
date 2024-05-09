@@ -231,6 +231,7 @@ static int cemu_load_program(struct cemu_dev *dev, unsigned long arg)
 	cio->runtime = download.runtime;
 	cio->runtime_scale = download.runtime_scale;
 	cio->ptype = download.ptype;
+	cio->indirect = download.indirect;
 	cio->sel = 0;
 	atomic_set(&cio->ref, 1);
 
@@ -359,22 +360,39 @@ static int cemu_create_mrs(struct cemu_dev *dev, unsigned long arg)
 	if (create.nr_fd <= 0 || create.nr_fd >= 128)
 		return -EINVAL;
 
-	int *mr_fd = kmalloc(sizeof(int) * create.nr_fd, GFP_KERNEL);
-	if (copy_from_user(mr_fd, create.fd, sizeof(int) * create.nr_fd)) {
-		kfree(mr_fd);
-		return -EFAULT;
-	}
-
-	int mr_len = sizeof(struct nvme_memory_range) * create.nr_fd;
-	struct nvme_memory_range *mr = kmalloc(mr_len, GFP_KERNEL);
+	void *buf = kmalloc((sizeof(int) * create.nr_fd) +
+				(sizeof(long long) * create.nr_fd * 2) +
+				(sizeof(struct nvme_memory_range) * create.nr_fd),
+				GFP_KERNEL);
+	int *mr_fd = buf;
+	long long *off = buf + sizeof(int) * create.nr_fd;
+	long long *size = (void *)off + sizeof(long long) * create.nr_fd;
+	struct nvme_memory_range *mr = (void *)size + sizeof(long long) * create.nr_fd;
+	int ret = -EFAULT;
+	if (copy_from_user(mr_fd, create.fd, sizeof(int) * create.nr_fd))
+		goto err;
+	if (copy_from_user(off, create.off, sizeof(long long) * create.nr_fd))
+		goto err;
+	if (copy_from_user(size, create.size, sizeof(long long) * create.nr_fd))
+		goto err;
+	ret = 0;
 
 	for (int i = 0; i < create.nr_fd; i++) {
 		struct file *file = fget(mr_fd[i]);
-		int ret = fdmfs_get_memory_range(file, &mr[i]);
+		ret = fdmfs_get_memory_range(file, &mr[i]);
 		if (ret) {
-			printk(KERN_ERR "CEMU CSD fdmfs_get_memory_range failed\n");
-			return ret;
+			pr_err("CEMU CSD fdmfs_get_memory_range failed\n");
+			goto err;
 		}
+		if (mr[i].len < off[i] + size[i]) {
+			pr_err("CEMU CSD ioctl cemu_create_mrs: off+size bigger than fd %d's size!", mr_fd[i]);
+			goto err;
+		}
+		mr[i].sb += off[i];
+		if (size[i] == 0)
+			mr[i].len -= off[i];
+		else
+			mr[i].len = size[i];
 	}
 
 	union nvme_result result;
@@ -384,16 +402,16 @@ static int cemu_create_mrs(struct cemu_dev *dev, unsigned long arg)
 	cmd.mrs_manage.rsid = 0;
 	cmd.mrs_manage.sel = 0;
 	cmd.mrs_manage.numr = create.nr_fd;
-	int ret = __nvme_submit_sync_cmd(dev->admin_q, &cmd, &result,
+	int mr_len = sizeof(struct nvme_memory_range) * create.nr_fd;
+	ret = __nvme_submit_sync_cmd(dev->admin_q, &cmd, &result,
 			mr, mr_len, NVME_QID_ANY, 0);
 	if (ret != 0)
-		return ret;
+		goto err;
 	uint16_t rsid = result.u16;
-	if (copy_to_user(&((struct ioctl_create_mrs *)arg)->rsid, &rsid, sizeof(rsid))) {
-		printk(KERN_ERR "CEMU CSD copy_to_user failed\n");
-		return -EFAULT;
-	}
-	kfree(mr);
+	if (copy_to_user(&((struct ioctl_create_mrs *)arg)->rsid, &rsid, sizeof(rsid)))
+		ret = -EFAULT;
+err:
+	kfree(buf);
 	return ret;
 }
 

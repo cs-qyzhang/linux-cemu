@@ -1789,23 +1789,24 @@ struct nvme_load_program_cmd {
 	__u8	flags;
 	__u16	cid;
 	__u32	nsid;
-	__u16	jit       : 1;  // 1 if jit, CEMU only
-	__u16	upload    : 1;  // 1 if upload to arm, CEMU only
+	__u16	jit       : 1;	// 1 if jit, CEMU only
+	__u16	upload    : 1;	// 1 if upload to arm, CEMU only
 	__u16	rsvd_ctrl : 14;
-	__u16	runtime_scale;  // CEMU only
-	__u32	runtime;        // runtime in ns when type is phantom, CEMU only
+	__u16	runtime_scale;	// CEMU only
+	__u32	runtime;	// runtime in ns when type is phantom, CEMU only
 	__u64	rsvd;
-	__u64	prp1;           // program buffer
+	__u64	prp1;		// program buffer
 	__u64	prp2;
-	__u32	pind   : 16;    // program index
-	__u32	ptype  : 8;     // program type
-	__u32	sel    : 1;     // 0 for load 1 for unload
-	__u32	pit    : 3;     // program identifier type, 0 is not used, 1 is PUID (program unique identifier)
-	__u32	rsvd10 : 4;
-	__u32	psize;          // total program size in bytes
-	__u64	pid;            // program identifier, PUID when pit is 1
-	__u32	numb;           // number of bytes to transfer
-	__u32	loff;           // load offset
+	__u16	pind;		// program index
+	__u8	ptype;		// program type
+	__u8	sel      : 1;	// 0 for load 1 for unload
+	__u8	pit      : 3;	// program identifier type, 0 is not used, 1 is PUID (program unique identifier)
+	__u8	indirect : 1;	// CEMU only
+	__u8	rsvd10   : 3;
+	__u32	psize;		// total program size in bytes
+	__u64	pid;		// program identifier, PUID when pit is 1
+	__u32	numb;		// number of bytes to transfer
+	__u32	loff;		// load offset
 };
 
 struct nvme_program_activation_cmd {
@@ -1838,7 +1839,9 @@ struct nvme_program_execute_cmd {
 	__u64	prp2;
 	__u64	cparam1;	// parameter data
 	__u64	cparam2;	// parameter data
-	__u64	rsvd14;
+	__u16	istream_nlb;	// input stream nlb, for indirect
+	__u16	ostream_nlb;	// input stream nlb, for indirect
+	__u32	rsvd14;
 };
 
 struct nvme_memory_range_set_manage_cmd {

@@ -24,6 +24,7 @@ struct cemu_bio {
 	int sel;
 	int psize;
 	int jit;
+	int indirect;
 	int runtime;
 	int runtime_scale;
 };
@@ -44,6 +45,7 @@ struct ioctl_download {
 	int		runtime;
 	int		runtime_scale;
 	int		jit;
+	int		indirect;
 	int 		pind;	/* out */
 };
 
@@ -62,7 +64,9 @@ struct ioctl_execute {
 
 /* IOCTL_CREATE_MRS argument */
 struct ioctl_create_mrs {
-	int		*fd;	// fd of FDMFS
+	int		*fd;	// fd array of FDMFS
+	long long	*off;	// offset array
+	long long	*size;	// size array
 	int		nr_fd;
 	uint16_t	rsid;
 };
