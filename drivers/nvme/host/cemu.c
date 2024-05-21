@@ -213,6 +213,10 @@ static int cemu_load_program(struct cemu_dev *dev, unsigned long arg)
 	// TODO: LOCK
 	struct sysfs_program *prog = find_program_by_name(dev, prog_name);
 	if (prog) {
+		if (copy_to_user(&((struct ioctl_download *)arg)->pind,
+				&prog->pind, sizeof(prog->pind))) {
+			printk(KERN_ERR "CEMU CSD copy_to_user failed\n");
+		}
 		printk(KERN_ERR "CEMU CSD program %s already exists\n", prog_name);
 		return -EEXIST;
 	}

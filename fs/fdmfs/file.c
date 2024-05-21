@@ -42,17 +42,22 @@ ssize_t fdmfs_copy_file_range(struct file *file_in, loff_t pos_in,
 	struct kiocb kiocb;
 	struct iov_iter iter;
 	struct bio_vec bvec;
+	loff_t fdm_off;
 	ssize_t ret;
 
 	pr_info("FDMFS: copy_file_range %zu bytes, pos_in %llu, pos_out %llu, in_is_fdmfs %d, out_is_fdmfs %d\n", size, pos_in, pos_out, in_is_fdmfs, out_is_fdmfs);
 
-	if (in_is_fdmfs)
+	if (in_is_fdmfs) {
 		init_sync_kiocb(&kiocb, file_out);
-	else
+		kiocb.ki_pos = pos_out;
+		fdm_off = pos_in;
+	} else {
 		init_sync_kiocb(&kiocb, file_in);
-	kiocb.ki_pos = pos_out;
+		kiocb.ki_pos = pos_in;
+		fdm_off = pos_out;
+	}
 
-	bvec_set_virt(&bvec, fdmfs_region_addr(inode) + pos_out, size);
+	bvec_set_virt(&bvec, fdmfs_region_addr(inode) + fdm_off, size);
 	unsigned int dir = in_is_fdmfs ? ITER_SOURCE : ITER_DEST;
 	iov_iter_bvec(&iter, dir, &bvec, 1, size);
 
