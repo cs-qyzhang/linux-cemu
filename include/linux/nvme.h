@@ -1841,7 +1841,7 @@ struct nvme_program_execute_cmd {
 	__u64	cparam2;	// parameter data
 	__u16	istream_nlb;	// input stream nlb, for indirect
 	__u16	ostream_nlb;	// input stream nlb, for indirect
-	__u32	rsvd14;
+	__u32	user_runtime;
 };
 
 struct nvme_memory_range_set_manage_cmd {

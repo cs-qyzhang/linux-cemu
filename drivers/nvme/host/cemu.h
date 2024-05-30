@@ -59,15 +59,15 @@ struct ioctl_execute {
 	uint16_t	buffer_len;
 	uint16_t	pind;
 	uint16_t	rsid;
-	uint16_t	memory_range_set;
+	uint32_t	runtime;
 };
 
 /* IOCTL_CREATE_MRS argument */
 struct ioctl_create_mrs {
+	int		nr_fd;
 	int		*fd;	// fd array of FDMFS
 	long long	*off;	// offset array
 	long long	*size;	// size array
-	int		nr_fd;
 	uint16_t	rsid;
 };
 

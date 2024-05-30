@@ -77,6 +77,7 @@ extern const struct iomap_ops fdmfs_iomap_ops;
 extern const struct file_operations fdmfs_fops;
 extern const struct inode_operations fdmfs_inode_ops;
 extern const struct inode_operations fdmfs_dir_inode_ops;
+extern const struct address_space_operations fdmfs_aops;
 // extern const struct file_operations fdmfs_dir_fops;
 
 #endif // _FDMFS_H

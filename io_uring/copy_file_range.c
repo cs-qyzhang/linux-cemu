@@ -34,7 +34,6 @@ int io_copy_file_range_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe
 	cp->len = READ_ONCE(sqe->len);
 	cp->copy_fd_in = READ_ONCE(sqe->splice_fd_in);
 	cp->flags = READ_ONCE(sqe->splice_flags);
-	req->flags |= REQ_F_FORCE_ASYNC;
 	return 0;
 }
 
@@ -44,8 +43,6 @@ int io_copy_file_range(struct io_kiocb *req, unsigned int issue_flags)
 	struct file *out = cp->file_out;
 	struct file *in;
 	ssize_t ret = 0;
-
-	WARN_ON_ONCE(issue_flags & IO_URING_F_NONBLOCK);
 
 	if (cp->flags & SPLICE_F_FD_IN_FIXED)
 		in = io_file_get_fixed(req, cp->copy_fd_in, issue_flags);
@@ -57,7 +54,7 @@ int io_copy_file_range(struct io_kiocb *req, unsigned int issue_flags)
 	}
 
 	if (cp->len)
-		ret = vfs_copy_file_range(in, cp->off_in, out, cp->off_out, cp->len, 0);
+		ret = vfs_copy_file_range(in, cp->off_in, out, cp->off_out, cp->len, COPY_FILE_ASYNC);
 
 	if (!(cp->flags & SPLICE_F_FD_IN_FIXED))
 		fput(in);

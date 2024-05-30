@@ -67,6 +67,7 @@ struct inode *fdmfs_icreate(struct fdmfs_sb_info *sbi, struct mnt_idmap *idmap,
 	case S_IFREG:
 		inode->i_op = &fdmfs_inode_ops;
 		inode->i_fop = &fdmfs_fops;
+		inode->i_mapping->a_ops = &fdmfs_aops;
 		break;
 	default:
 		pr_err("FDMFS: unknown inode type\n");
@@ -103,7 +104,7 @@ static struct dentry *fdmfs_lookup(struct inode *dir, struct dentry *dentry,
 	struct inode *inode = NULL;
 	// struct fdmfs_sb_info *sbi = FDMFS_SB(dir->i_sb);
 
-	pr_info("FDMFS: lookup %s\n", dentry->d_name.name);
+	// pr_info("FDMFS: lookup %s\n", dentry->d_name.name);
 
 	if (dentry->d_name.len > FDMFS_NAMELEN)
 		return ERR_PTR(-ENAMETOOLONG);
@@ -188,6 +189,11 @@ static int fdmfs_rename(struct mnt_idmap *idmap, struct inode *old_dir,
 
 	return 0;
 }
+
+// O_DIRECT requires direct_IO()
+const struct address_space_operations fdmfs_aops = {
+	.direct_IO = noop_direct_IO,
+};
 
 const struct inode_operations fdmfs_dir_inode_ops = {
 	.lookup		= fdmfs_lookup,

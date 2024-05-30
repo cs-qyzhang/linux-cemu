@@ -480,6 +480,8 @@ const struct io_issue_def io_issue_defs[] = {
 		.hash_reg_file		= 1,
 		.unbound_nonreg_file	= 1,
 		.audit_skip		= 1,
+		.iopoll			= 1,
+		.iopoll_queue		= 1,
 		.prep			= io_copy_file_range_prep,
 		.issue			= io_copy_file_range,
 	},

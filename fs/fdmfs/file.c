@@ -6,19 +6,19 @@
 #include "fdmfs.h"
 
 static int fdmfs_open(struct inode *inode, struct file *filp) {
-	pr_info("FDMFS: open\n");
+	// pr_info("FDMFS: open\n");
 	filp->private_data = inode->i_private;
 	return 0;
 }
 
 static int fdmfs_release(struct inode *inode, struct file *filp) {
-	pr_info("FDMFS: close\n");
+	// pr_info("FDMFS: close\n");
 	return 0;
 }
 
 static ssize_t fdmfs_rw_iter(struct kiocb *iocb, struct iov_iter *iter)
 {
-	pr_info("FDMFS: rw_iter, size %lu, off %llu\n", iov_iter_count(iter), iocb->ki_pos);
+	// pr_info("FDMFS: rw_iter, size %lu, off %llu\n", iov_iter_count(iter), iocb->ki_pos);
 	if (iocb->ki_pos % 512) {
 		pr_err("FDMFS: rw_iter require 512-aligned offset!\n");
 		return -EINVAL;
@@ -45,7 +45,7 @@ ssize_t fdmfs_copy_file_range(struct file *file_in, loff_t pos_in,
 	loff_t fdm_off;
 	ssize_t ret;
 
-	pr_info("FDMFS: copy_file_range %zu bytes, pos_in %llu, pos_out %llu, in_is_fdmfs %d, out_is_fdmfs %d\n", size, pos_in, pos_out, in_is_fdmfs, out_is_fdmfs);
+	// pr_info("FDMFS: copy_file_range %zu bytes, pos_in %llu, pos_out %llu, in_is_fdmfs %d, out_is_fdmfs %d\n", size, pos_in, pos_out, in_is_fdmfs, out_is_fdmfs);
 
 	if (in_is_fdmfs) {
 		init_sync_kiocb(&kiocb, file_out);
@@ -57,6 +57,9 @@ ssize_t fdmfs_copy_file_range(struct file *file_in, loff_t pos_in,
 		fdm_off = pos_out;
 	}
 
+	if (flags & COPY_FILE_ASYNC)
+		kiocb.ki_flags |= IOCB_NOWAIT;
+
 	bvec_set_virt(&bvec, fdmfs_region_addr(inode) + fdm_off, size);
 	unsigned int dir = in_is_fdmfs ? ITER_SOURCE : ITER_DEST;
 	iov_iter_bvec(&iter, dir, &bvec, 1, size);
@@ -65,7 +68,6 @@ ssize_t fdmfs_copy_file_range(struct file *file_in, loff_t pos_in,
 		ret = call_write_iter(file_out, &kiocb, &iter);
 	else
 		ret = call_read_iter(file_in, &kiocb, &iter);
-	BUG_ON(ret == -EIOCBQUEUED);
 	return ret;
 }
 
@@ -203,6 +205,7 @@ const struct file_operations fdmfs_fops = {
 	.write_iter		= fdmfs_rw_iter,
 	.copy_file_range	= fdmfs_copy_file_range,
 	.fallocate		= fdmfs_fallocate,
+	.iopoll			= iocb_bio_iopoll,
 	.fsync			= noop_fsync,
 	.llseek			= generic_file_llseek,
 };

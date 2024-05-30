@@ -1053,7 +1053,7 @@ static blk_status_t nvme_setup_execute(struct nvme_ns *ns, struct request *req,
 	cmnd->execute.flags = 0;
 	cmnd->execute.prp1 = 0;
 	cmnd->execute.prp2 = 0;
-	cmnd->execute.rsvd14 = 0;
+	cmnd->execute.user_runtime = 0;
 	return 0;
 }
 

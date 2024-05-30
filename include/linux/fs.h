@@ -1977,6 +1977,7 @@ struct dir_context {
  * COPY_FILE_SPLICE: call splice direct instead of fs clone/copy ops
  */
 #define COPY_FILE_SPLICE		(1 << 0)
+#define COPY_FILE_ASYNC			(1 << 1)
 
 struct iov_iter;
 struct io_uring_cmd;

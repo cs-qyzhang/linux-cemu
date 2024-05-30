@@ -1495,7 +1495,7 @@ ssize_t vfs_copy_file_range(struct file *file_in, loff_t pos_in,
 	bool splice = flags & COPY_FILE_SPLICE;
 	bool samesb = file_inode(file_in)->i_sb == file_inode(file_out)->i_sb;
 
-	if (flags & ~COPY_FILE_SPLICE)
+	if (flags & ~(COPY_FILE_SPLICE | COPY_FILE_ASYNC))
 		return -EINVAL;
 
 	ret = generic_copy_file_checks(file_in, pos_in, file_out, pos_out, &len,

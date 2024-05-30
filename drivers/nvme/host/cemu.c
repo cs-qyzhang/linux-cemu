@@ -120,7 +120,7 @@ static void cemu_bdev_submit_bio(struct bio *bio)
 {
 	struct cemu_dev *dev = bio->bi_bdev->bd_disk->private_data;
 
-	printk(KERN_INFO "cemu_bdev_submit_bio: len %u, offset %u, sector %llu\n", bio->bi_io_vec->bv_len, bio->bi_io_vec->bv_offset, bio->bi_iter.bi_sector);
+	// printk(KERN_INFO "cemu_bdev_submit_bio: len %u, offset %u, sector %llu\n", bio->bi_io_vec->bv_len, bio->bi_io_vec->bv_offset, bio->bi_iter.bi_sector);
 
 	if (dev == NULL) {
 		bio_io_error(bio);
@@ -482,8 +482,6 @@ static int program_execute(struct cemu_dev *dev, struct io_uring_cmd *ioucmd)
 	cio->error = 0;
 	cio->pind = 1;
 
-	pr_info("program_execute\n");
-
 	blk_opf_t bio_opf = REQ_OP_PROGRAM_EXECUTE;
 	struct bio *bio = bio_alloc(dev->disk->part0, 0, bio_opf, GFP_KERNEL);
 	if (bio == NULL) {
@@ -494,7 +492,6 @@ static int program_execute(struct cemu_dev *dev, struct io_uring_cmd *ioucmd)
 	bio->bi_private = cio;
 	bio->bi_end_io = uring_bio_end_io;
 
-	pr_info("before submit_bio, bdev: %p\n", bio->bi_bdev);
 	submit_bio(bio);
 	return -EIOCBQUEUED;
 }
@@ -611,10 +608,9 @@ int cemu_dev_add(struct pci_dev *pdev, struct nvme_ctrl *ctrl)
 	disk->queue->limits.logical_block_size = 1;	// required for load program, since program size is arbitrary
 	disk->queue->limits.physical_block_size = 1;
 	set_capacity(disk, dev->size / SECTOR_SIZE);
-	// blk_queue_write_cache(disk->queue, true, true);
 
-	// blk_queue_flag_set(QUEUE_FLAG_NONROT, disk->queue);
-	// blk_queue_flag_set(QUEUE_FLAG_PCI_P2PDMA, disk->queue);
+	// enable IOURING_IOPOLL
+	blk_queue_flag_set(QUEUE_FLAG_POLL, disk->queue);
 
 	printk(KERN_INFO "CEMU cemu_dev_add start device_add_disk\n");
 	err = add_disk(disk);
