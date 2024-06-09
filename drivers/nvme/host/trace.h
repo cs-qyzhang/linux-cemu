@@ -94,6 +94,8 @@ TRACE_EVENT(nvme_complete_rq,
 		__field(u8, retries)
 		__field(u8, flags)
 		__field(u16, status)
+		__field(u8, opcode)
+		__field(u32, nsid)
 	    ),
 	    TP_fast_assign(
 		__entry->ctrl_id = nvme_req(req)->ctrl->instance;
@@ -103,6 +105,8 @@ TRACE_EVENT(nvme_complete_rq,
 		__entry->retries = nvme_req(req)->retries;
 		__entry->flags = nvme_req(req)->flags;
 		__entry->status = nvme_req(req)->status;
+		__entry->opcode = nvme_req(req)->cmd->common.opcode;
+		__entry->nsid = nvme_req(req)->cmd->common.nsid;
 		__assign_disk_name(__entry->disk, req->q->disk);
 	    ),
 	    TP_printk("nvme%d: %sqid=%d, cmdid=%u, res=%#llx, retries=%u, flags=0x%x, status=%#x",
@@ -134,6 +138,26 @@ TRACE_EVENT(nvme_async_event,
 			aer_name(NVME_AER_CSS),
 			aer_name(NVME_AER_VS))
 	)
+);
+
+TRACE_EVENT(nvme_prep_rq,
+	TP_PROTO(struct request *req, u8 opcode, u32 nsid, u16 nlb),
+	TP_ARGS(req, opcode, nsid, nlb),
+	TP_STRUCT__entry(
+		__field(struct request *, req)
+		__field(u8, opcode)
+		__field(u32, nsid)
+		__field(u16, nlb)
+	),
+	TP_fast_assign(
+		__entry->req = req;
+		__entry->opcode = opcode;
+		__entry->nsid = nsid;
+		__entry->nlb = nlb;
+	),
+	TP_printk("nvme%d: opcode=%u, nsid=%u, nlb=%u",
+		nvme_req(__entry->req)->ctrl->instance,
+		__entry->opcode, __entry->nsid, __entry->nlb)
 );
 
 #undef aer_name

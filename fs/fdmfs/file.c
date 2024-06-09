@@ -5,6 +5,10 @@
 
 #include "fdmfs.h"
 
+#define CREATE_TRACE_POINTS
+
+#include <trace/events/fdmfs.h>
+
 static int fdmfs_open(struct inode *inode, struct file *filp) {
 	// pr_info("FDMFS: open\n");
 	filp->private_data = inode->i_private;
@@ -23,12 +27,16 @@ static ssize_t fdmfs_rw_iter(struct kiocb *iocb, struct iov_iter *iter)
 		pr_err("FDMFS: rw_iter require 512-aligned offset!\n");
 		return -EINVAL;
 	}
+
+	trace_fdmfs_rw_begin(iocb);
 	struct inode *ino = file_inode(iocb->ki_filp);
 
 	inode_lock_shared(ino);
 	ssize_t ret = iomap_dio_rw(iocb, iter, &fdmfs_iomap_ops, NULL, 0, NULL, 0);
+	trace_fdmfs_rw_middle(iocb);
 	inode_unlock_shared(ino);
 	file_accessed(iocb->ki_filp);
+	trace_fdmfs_rw_end(iocb);
 	return ret;
 }
 

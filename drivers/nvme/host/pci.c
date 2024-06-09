@@ -1012,6 +1012,7 @@ static blk_status_t nvme_prep_rq(struct nvme_dev *dev, struct request *req)
 	}
 
 	nvme_start_request(req);
+	trace_nvme_prep_rq(req, iod->cmd.common.opcode, iod->cmd.common.nsid, iod->cmd.rw.length);
 	return BLK_STS_OK;
 out_unmap_data:
 	nvme_unmap_data(dev, req);
