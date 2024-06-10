@@ -611,6 +611,7 @@ int cemu_dev_add(struct pci_dev *pdev, struct nvme_ctrl *ctrl)
 
 	// enable IOURING_IOPOLL
 	blk_queue_flag_set(QUEUE_FLAG_POLL, disk->queue);
+	blk_queue_flag_set(QUEUE_FLAG_NOWAIT, disk->queue);
 
 	printk(KERN_INFO "CEMU cemu_dev_add start device_add_disk\n");
 	err = add_disk(disk);

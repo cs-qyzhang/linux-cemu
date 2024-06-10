@@ -12,6 +12,7 @@
 static int fdmfs_open(struct inode *inode, struct file *filp) {
 	// pr_info("FDMFS: open\n");
 	filp->private_data = inode->i_private;
+	filp->f_mode |= FMODE_NOWAIT;
 	return 0;
 }
 
