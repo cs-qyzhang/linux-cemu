@@ -591,6 +591,7 @@ int cemu_dev_add(struct pci_dev *pdev, struct nvme_ctrl *ctrl)
 	dev->admin_q = ctrl->admin_q;
 
 	cemu_p2pmem_setup(pdev, dev);
+	dev->minor = ctrl->instance;
 
 	printk(KERN_INFO "CEMU cemu_dev_add start alloc_disk\n");
 	disk = blk_alloc_disk(ctrl->numa_node);
