@@ -3336,6 +3336,7 @@ retry:
 static int ext4_iomap_begin(struct inode *inode, loff_t offset, loff_t length,
 		unsigned flags, struct iomap *iomap, struct iomap *srcmap)
 {
+	trace_ext4_iomap_begin(inode);
 	int ret;
 	struct ext4_map_blocks map;
 	u8 blkbits = inode->i_blkbits;
@@ -3381,6 +3382,7 @@ out:
 	map.m_len = fscrypt_limit_io_blocks(inode, map.m_lblk, map.m_len);
 
 	ext4_set_iomap(inode, iomap, &map, offset, length, flags);
+	trace_ext4_iomap_end(inode);
 
 	return 0;
 }

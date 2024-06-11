@@ -2977,6 +2977,38 @@ TRACE_EVENT(ext4_update_sb,
 		  __entry->fsblk, __entry->flags)
 );
 
+TRACE_EVENT(ext4_iomap_begin,
+	TP_PROTO(struct inode *inode),
+
+	TP_ARGS(inode),
+
+	TP_STRUCT__entry(
+		__field(struct inode *,	inode)
+	),
+
+	TP_fast_assign(
+		__entry->inode	= inode;
+	),
+
+	TP_printk("inode %p", __entry->inode)
+);
+
+TRACE_EVENT(ext4_iomap_end,
+	TP_PROTO(struct inode *inode),
+
+	TP_ARGS(inode),
+
+	TP_STRUCT__entry(
+		__field(struct inode *,	inode)
+	),
+
+	TP_fast_assign(
+		__entry->inode	= inode;
+	),
+
+	TP_printk("inode %p", __entry->inode)
+);
+
 #endif /* _TRACE_EXT4_H */
 
 /* This part must be outside protection */

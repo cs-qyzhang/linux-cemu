@@ -44,6 +44,30 @@ TRACE_EVENT(fdmfs_rw_end,
 	    TP_printk("iocb %p", __entry->iocb)
 );
 
+TRACE_EVENT(fdmfs_copy_file_range_begin,
+	    TP_PROTO(struct file *file),
+	    TP_ARGS(file),
+	    TP_STRUCT__entry(
+		__field(struct file *, file)
+	    ),
+	    TP_fast_assign(
+		__entry->file = file;
+	    ),
+	    TP_printk("file %p", __entry->file)
+);
+
+TRACE_EVENT(fdmfs_copy_file_range_end,
+	    TP_PROTO(struct file *file),
+	    TP_ARGS(file),
+	    TP_STRUCT__entry(
+		__field(struct file *, file)
+	    ),
+	    TP_fast_assign(
+		__entry->file = file;
+	    ),
+	    TP_printk("file %p", __entry->file)
+);
+
 TRACE_EVENT(fdmfs_iomap_begin,
 	    TP_PROTO(struct inode *inode),
 	    TP_ARGS(inode),

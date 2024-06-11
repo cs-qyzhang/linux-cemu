@@ -41,10 +41,50 @@ static ssize_t fdmfs_rw_iter(struct kiocb *iocb, struct iov_iter *iter)
 	return ret;
 }
 
+ssize_t fdmfs_copy_file_range_kiocb(struct kiocb *kiocb, struct file *file_in,
+					loff_t pos_in, struct file *file_out,
+					loff_t pos_out, size_t size)
+{
+	trace_fdmfs_copy_file_range_begin(file_in);
+	bool in_is_fdmfs = file_in->f_op == &fdmfs_fops;
+	bool out_is_fdmfs = file_out->f_op == &fdmfs_fops;
+	struct fdmfs_inode *inode = in_is_fdmfs ? file_in->private_data : file_out->private_data;
+	struct iov_iter iter;
+	struct bio_vec bvec;
+	loff_t fdm_off;
+	ssize_t ret;
+
+	// pr_info("FDMFS: copy_file_range %zu bytes, pos_in %llu, pos_out %llu, in_is_fdmfs %d, out_is_fdmfs %d\n", size, pos_in, pos_out, in_is_fdmfs, out_is_fdmfs);
+
+	if (in_is_fdmfs) {
+		kiocb->ki_filp = file_out;
+		kiocb->ki_pos = pos_out;
+		fdm_off = pos_in;
+	} else {
+		kiocb->ki_filp = file_in;
+		kiocb->ki_pos = pos_in;
+		fdm_off = pos_out;
+	}
+	kiocb->ki_flags |= kiocb->ki_filp->f_iocb_flags,
+	// pr_info("fdmfs_copy_file_range_kiocb kiocb.flags: %d\n", kiocb->ki_flags);
+
+	bvec_set_virt(&bvec, fdmfs_region_addr(inode) + fdm_off, size);
+	unsigned int dir = in_is_fdmfs ? ITER_SOURCE : ITER_DEST;
+	iov_iter_bvec(&iter, dir, &bvec, 1, size);
+
+	trace_fdmfs_copy_file_range_end(file_in);
+	if (in_is_fdmfs)
+		ret = call_write_iter(file_out, kiocb, &iter);
+	else
+		ret = call_read_iter(file_in, kiocb, &iter);
+	return ret;
+}
+
 ssize_t fdmfs_copy_file_range(struct file *file_in, loff_t pos_in,
 				     struct file *file_out, loff_t pos_out,
 				     size_t size, unsigned int flags)
 {
+	trace_fdmfs_copy_file_range_begin(file_in);
 	bool in_is_fdmfs = file_in->f_op == &fdmfs_fops;
 	bool out_is_fdmfs = file_out->f_op == &fdmfs_fops;
 	struct fdmfs_inode *inode = in_is_fdmfs ? file_in->private_data : file_out->private_data;
@@ -77,6 +117,7 @@ ssize_t fdmfs_copy_file_range(struct file *file_in, loff_t pos_in,
 		ret = call_write_iter(file_out, &kiocb, &iter);
 	else
 		ret = call_read_iter(file_in, &kiocb, &iter);
+	trace_fdmfs_copy_file_range_end(file_in);
 	return ret;
 }
 
