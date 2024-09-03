@@ -1834,12 +1834,13 @@ struct nvme_program_execute_cmd {
 	__u16	rsid;		// memory range set id
 	__u32	numr;		// number of memory ranges
 	__u32	dlen;		// data buffer len
-	__u32	group;		// CEMU specific, scheduling group
+	__u32	rsvd;		// CEMU specific, scheduling group
 	__u64	prp1;		// data buffer
 	__u64	prp2;
 	__u64	cparam1;	// parameter data
 	__u64	cparam2;	// parameter data
-	__u32	chunk_nlb;	// indirect chunk nlb
+	__u32   group     : 8;	// group
+	__u32	chunk_nlb : 24;	// indirect chunk nlb
 	__u32	user_runtime;
 };
 

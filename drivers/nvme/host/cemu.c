@@ -9,6 +9,7 @@
 #include <linux/pci-p2pdma.h>
 #include <linux/list.h>
 #include <linux/io_uring/cmd.h>
+#include <linux/mutex.h>
 
 #include "cemu.h"
 #include "../../../fs/fdmfs/fdmfs.h"
@@ -36,6 +37,7 @@ struct cemu_dev {
 	int cur_pind;
 	int cur_rsid;
 	struct list_head prog_list;
+	struct mutex lock;
 };
 
 struct sysfs_program {
@@ -211,6 +213,7 @@ static int cemu_load_program(struct cemu_dev *dev, unsigned long arg)
 		return -EFAULT;
 
 	// TODO: LOCK
+	mutex_lock(&dev->lock);
 	struct sysfs_program *prog = find_program_by_name(dev, prog_name);
 	if (prog) {
 		if (copy_to_user(&((struct ioctl_download *)arg)->pind,
@@ -218,7 +221,8 @@ static int cemu_load_program(struct cemu_dev *dev, unsigned long arg)
 			printk(KERN_ERR "CEMU CSD copy_to_user failed\n");
 		}
 		printk(KERN_ERR "CEMU CSD program %s already exists\n", prog_name);
-		return -EEXIST;
+		ret = -EEXIST;
+		goto out;
 	}
 
 	struct iov_iter iter;
@@ -287,10 +291,10 @@ static int cemu_load_program(struct cemu_dev *dev, unsigned long arg)
 		__set_current_state(TASK_RUNNING);
 	}
 
-out:
 	if (cio->error) {
 		printk(KERN_ERR "CEMU CSD load program failed\n");
-		return cio->error;
+		ret = cio->error;
+		goto out;
 	}
 	if (copied) {
 		// create sysfs entry
@@ -314,8 +318,10 @@ out:
 				&prog->pind, sizeof(prog->pind))) {
 			printk(KERN_ERR "CEMU CSD copy_to_user failed\n");
 		}
-		return copied;
+		ret = copied;
 	}
+out:
+	mutex_unlock(&dev->lock);
 	return ret;
 }
 
@@ -419,6 +425,23 @@ err:
 	return ret;
 }
 
+static int cemu_delete_mrs(struct cemu_dev *dev, unsigned long arg)
+{
+	struct ioctl_create_mrs delete;
+	if (copy_from_user(&delete, (void *)arg, sizeof(delete)))
+		return -EFAULT;
+
+	union nvme_result result;
+	struct nvme_command cmd = {};
+	cmd.mrs_manage.nsid = 3;
+	cmd.mrs_manage.opcode = 0x21;
+	cmd.mrs_manage.rsid = delete.rsid;
+	cmd.mrs_manage.sel = 1;
+	__nvme_submit_sync_cmd(dev->admin_q, &cmd, &result,
+			NULL, 0, NVME_QID_ANY, 0);
+	return 0;
+}
+
 static long cemu_cdev_ioctl(struct file *filp, unsigned int ioctl_cmd,
 		unsigned long arg)
 {
@@ -434,6 +457,8 @@ static long cemu_cdev_ioctl(struct file *filp, unsigned int ioctl_cmd,
 		return cemu_program_execute(dev, arg);
 	case IOCTL_CEMU_CREATE_MRS:
 		return cemu_create_mrs(dev, arg);
+	case IOCTL_CEMU_DELETE_MRS:
+		return cemu_delete_mrs(dev, arg);
 	default:
 		printk(KERN_ERR "CEMU CSD ioctl: unknown ioctl cmd %d!!!\n", ioctl_cmd);
 		return -ENOTTY;
@@ -582,6 +607,7 @@ int cemu_dev_add(struct pci_dev *pdev, struct nvme_ctrl *ctrl)
 		return -ENOMEM;
 	}
 	dev->pdev = pdev;
+	mutex_init(&dev->lock);
 
 	ns = nvme_find_get_ns(ctrl, 1);	// FIXME: nsid
 	if (ns == NULL) {

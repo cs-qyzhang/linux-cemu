@@ -71,6 +71,7 @@ modules.order
 /modules.builtin.modinfo
 /modules.nsdeps
 /build
+/drivers/xilinx
 
 #
 # RPM spec file (make rpm-pkg)

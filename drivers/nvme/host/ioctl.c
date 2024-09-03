@@ -581,6 +581,7 @@ int nvme_ioctl(struct block_device *bdev, blk_mode_t mode,
 		unsigned int cmd, unsigned long arg)
 {
 	struct nvme_ns *ns = bdev->bd_disk->private_data;
+	ns = nvme_find_get_ns(ns->ctrl, 3);	// FIXME: nsid
 	bool open_for_write = mode & BLK_OPEN_WRITE;
 	void __user *argp = (void __user *)arg;
 	unsigned int flags = 0;
