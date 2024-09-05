@@ -54,7 +54,7 @@ ssize_t fdmfs_copy_file_range_kiocb(struct kiocb *kiocb, struct file *file_in,
 	loff_t fdm_off;
 	ssize_t ret;
 
-	// pr_info("FDMFS: copy_file_range %zu bytes, pos_in %llu, pos_out %llu, in_is_fdmfs %d, out_is_fdmfs %d\n", size, pos_in, pos_out, in_is_fdmfs, out_is_fdmfs);
+	pr_info("FDMFS: copy_file_range %zu bytes, pos_in %llu, pos_out %llu, in_is_fdmfs %d, out_is_fdmfs %d\n", size, pos_in, pos_out, in_is_fdmfs, out_is_fdmfs);
 
 	if (in_is_fdmfs) {
 		kiocb->ki_filp = file_out;
@@ -66,7 +66,6 @@ ssize_t fdmfs_copy_file_range_kiocb(struct kiocb *kiocb, struct file *file_in,
 		fdm_off = pos_out;
 	}
 	kiocb->ki_flags |= kiocb->ki_filp->f_iocb_flags,
-	// pr_info("fdmfs_copy_file_range_kiocb kiocb.flags: %d\n", kiocb->ki_flags);
 
 	bvec_set_virt(&bvec, fdmfs_region_addr(inode) + fdm_off, size);
 	unsigned int dir = in_is_fdmfs ? ITER_SOURCE : ITER_DEST;
@@ -94,7 +93,7 @@ ssize_t fdmfs_copy_file_range(struct file *file_in, loff_t pos_in,
 	loff_t fdm_off;
 	ssize_t ret;
 
-	// pr_info("FDMFS: copy_file_range %zu bytes, pos_in %llu, pos_out %llu, in_is_fdmfs %d, out_is_fdmfs %d\n", size, pos_in, pos_out, in_is_fdmfs, out_is_fdmfs);
+	pr_info("FDMFS: copy_file_range %zu bytes, pos_in %llu, pos_out %llu, in_is_fdmfs %d, out_is_fdmfs %d\n", size, pos_in, pos_out, in_is_fdmfs, out_is_fdmfs);
 
 	if (in_is_fdmfs) {
 		init_sync_kiocb(&kiocb, file_out);
@@ -176,8 +175,8 @@ static long fdmfs_fallocate(struct file *filp, int mode,
 		return -EINVAL;
 	}
 
-	if (length % 512) {
-		pr_err("FDMFS: fallocate require 512-aligned length!\n");
+	if (length % 4096) {
+		pr_err("FDMFS: fallocate require 4096-aligned length!\n");
 		return -EINVAL;
 	}
 

@@ -914,7 +914,7 @@ static inline int is_memory_rw_cmnd(struct nvme_dev *dev, struct request *req)
 static uintptr_t cemu_p2p_offset(struct nvme_dev *dev, struct request *req)
 {
 	struct bio_vec *bv = req->bio->bi_io_vec;
-	return page_to_phys(bv->bv_page) + bv->bv_offset - dev->ctrl.cemu_p2p_start;
+	return page_to_phys(bv->bv_page) + bv->bv_offset - dev->ctrl.cemu_p2p_start + req->bio->bi_iter.bi_bvec_done;
 }
 #endif
 

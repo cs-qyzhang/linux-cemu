@@ -389,6 +389,11 @@ static int cemu_create_mrs(struct cemu_dev *dev, unsigned long arg)
 
 	for (int i = 0; i < create.nr_fd; i++) {
 		struct file *file = fget(mr_fd[i]);
+		if (file == NULL) {
+			pr_err("CEMU CSD fget fd %d failed\n", mr_fd[i]);
+			ret = -EBADF;
+			goto err;
+		}
 		ret = fdmfs_get_memory_range(file, &mr[i]);
 		if (ret) {
 			pr_err("CEMU CSD fdmfs_get_memory_range failed\n");
