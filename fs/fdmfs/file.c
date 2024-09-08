@@ -54,7 +54,7 @@ ssize_t fdmfs_copy_file_range_kiocb(struct kiocb *kiocb, struct file *file_in,
 	loff_t fdm_off;
 	ssize_t ret;
 
-	pr_info("FDMFS: copy_file_range %zu bytes, pos_in %llu, pos_out %llu, in_is_fdmfs %d, out_is_fdmfs %d\n", size, pos_in, pos_out, in_is_fdmfs, out_is_fdmfs);
+	// pr_info("FDMFS: copy_file_range %zu bytes, pos_in %llu, pos_out %llu, in_is_fdmfs %d, out_is_fdmfs %d\n", size, pos_in, pos_out, in_is_fdmfs, out_is_fdmfs);
 
 	if (in_is_fdmfs) {
 		kiocb->ki_filp = file_out;
@@ -93,7 +93,7 @@ ssize_t fdmfs_copy_file_range(struct file *file_in, loff_t pos_in,
 	loff_t fdm_off;
 	ssize_t ret;
 
-	pr_info("FDMFS: copy_file_range %zu bytes, pos_in %llu, pos_out %llu, in_is_fdmfs %d, out_is_fdmfs %d\n", size, pos_in, pos_out, in_is_fdmfs, out_is_fdmfs);
+	// pr_info("FDMFS: copy_file_range %zu bytes, pos_in %llu, pos_out %llu, in_is_fdmfs %d, out_is_fdmfs %d\n", size, pos_in, pos_out, in_is_fdmfs, out_is_fdmfs);
 
 	if (in_is_fdmfs) {
 		init_sync_kiocb(&kiocb, file_out);

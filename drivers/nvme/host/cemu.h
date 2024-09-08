@@ -5,6 +5,11 @@
 #include <linux/io_uring/cmd.h>
 #include "nvme.h"
 
+#define CEMU_BLKDEV_NAME	"cemu"
+#define CEMU_CHRDEV_NAME	"cemuc"
+#define CEMU_MAX_MINOR		64
+#define CEMU_SLM_BAR		2
+
 struct cemu_bio {
 	atomic_t		ref;
 	unsigned		flags;
@@ -71,6 +76,35 @@ struct ioctl_create_mrs {
 	long long	*size;	// size array
 	uint16_t	rsid;
 };
+
+struct cemu_dev {
+	struct cdev cdev;
+	struct gendisk *disk;
+	struct request_queue *rq;
+	struct request_queue *admin_q;
+	struct device *dev;
+	struct block_device *nvme_bdev;
+	struct pci_dev *pdev;
+	struct scatterlist *dma_sgl;
+	struct nvme_ctrl *ctrl;
+	int sgl_nents;
+	int minor;
+	size_t size;
+	dma_addr_t p2p_addr;
+	struct kobject *sys_fs;
+	int cur_pind;
+	int cur_rsid;
+	struct list_head prog_list;
+	struct mutex lock;
+};
+
+extern int cemu_bdev_major;
+extern int cemu_bdev_minor;
+extern int cemu_cdev_major;
+extern int cemu_cdev_minor;
+extern struct cemu_dev *cemu_bdev[CEMU_MAX_MINOR];
+extern dma_addr_t cemu_p2p_start[CEMU_MAX_MINOR];
+extern dma_addr_t cemu_p2p_end[CEMU_MAX_MINOR];
 
 int cemu_dev_add(struct pci_dev *pdev, struct nvme_ctrl *ctrl);
 void cemu_dev_remove(struct pci_dev *pdev, struct nvme_ctrl *ctrl);

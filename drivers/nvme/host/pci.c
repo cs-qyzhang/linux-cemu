@@ -895,7 +895,11 @@ struct nvme_memory_rw_cmd {
 
 static inline int is_cemu_p2p_addr(struct nvme_ctrl *ctrl, dma_addr_t addr)
 {
-	return (addr >= ctrl->cemu_p2p_start) && (addr < ctrl->cemu_p2p_end);
+	for (int i = 0; i < cemu_bdev_minor; i++) {
+		if (addr >= cemu_bdev[i]->ctrl->cemu_p2p_start && addr < cemu_bdev[i]->ctrl->cemu_p2p_end)
+			return i;
+	}
+	return -1;
 }
 
 static inline int is_memory_copy_cmnd(struct nvme_dev *dev, struct request *req, struct nvme_command *cmd)
@@ -903,7 +907,7 @@ static inline int is_memory_copy_cmnd(struct nvme_dev *dev, struct request *req,
 	return (cmd->rw.nsid == 2 && cmd->rw.opcode == 1) ||
 		(req->bio && req->bio->bi_io_vec &&
 			is_cemu_p2p_addr(&dev->ctrl,
-				page_to_phys(req->bio->bi_io_vec->bv_page)));
+				page_to_phys(req->bio->bi_io_vec->bv_page)) >= 0);
 }
 
 static inline int is_memory_rw_cmnd(struct nvme_dev *dev, struct request *req)
@@ -911,10 +915,22 @@ static inline int is_memory_rw_cmnd(struct nvme_dev *dev, struct request *req)
 	return req->bio && bio_flagged(req->bio, BIO_NVME_MEMORY_CMD);
 }
 
-static uintptr_t cemu_p2p_offset(struct nvme_dev *dev, struct request *req)
+static uintptr_t cemu_p2p_offset(struct nvme_dev *dev, struct request *req, struct nvme_command *cmd)
 {
 	struct bio_vec *bv = req->bio->bi_io_vec;
-	return page_to_phys(bv->bv_page) + bv->bv_offset - dev->ctrl.cemu_p2p_start + req->bio->bi_iter.bi_bvec_done;
+	int dev_idx = is_cemu_p2p_addr(&dev->ctrl, page_to_phys(bv->bv_page));
+	pr_info("cemu_p2p_offset: dev_idx %d, minor %d, p2p_start %llx, addr %llx, offset %llx\n", dev_idx,
+		cemu_bdev[dev_idx]->minor,
+		cemu_bdev[dev_idx]->ctrl->cemu_p2p_start,
+		page_to_phys(bv->bv_page) + bv->bv_offset + req->bio->bi_iter.bi_bvec_done,
+		page_to_phys(bv->bv_page) + bv->bv_offset - cemu_bdev[dev_idx]->ctrl->cemu_p2p_start + req->bio->bi_iter.bi_bvec_done);
+	return page_to_phys(bv->bv_page) + bv->bv_offset - cemu_bdev[dev_idx]->ctrl->cemu_p2p_start + req->bio->bi_iter.bi_bvec_done;
+}
+
+static uintptr_t cemu_addr(struct nvme_dev *dev, struct request *req)
+{
+	struct bio_vec *bv = req->bio->bi_io_vec;
+	return page_to_phys(bv->bv_page) + bv->bv_offset + req->bio->bi_iter.bi_bvec_done;
 }
 #endif
 
@@ -977,7 +993,8 @@ static blk_status_t nvme_prep_rq(struct nvme_dev *dev, struct request *req)
 			copy->nsid = 2;
 			copy->nr = 1;
 			copy->opcode = 1; // memory copy
-			copy->sdaddr = cemu_p2p_offset(dev, req);
+			// copy->sdaddr = cemu_p2p_offset(dev, req, cmd);
+			copy->sdaddr = cemu_addr(dev, req);
 			copy->rsvd14 = (uintptr_t)cf;// for kfree in nvme_handle_cqe
 		} else {
 			if (is_memory_rw && cmd->rw.nsid != 3) {

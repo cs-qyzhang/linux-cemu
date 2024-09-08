@@ -14,31 +14,7 @@
 #include "cemu.h"
 #include "../../../fs/fdmfs/fdmfs.h"
 
-#define CEMU_BLKDEV_NAME	"cemu"
-#define CEMU_CHRDEV_NAME	"cemuc"
-#define CEMU_MAX_MINOR		64
-#define CEMU_SLM_BAR		2
 #define to_sysfs_program(x)	container_of(x, struct sysfs_program, attr)
-
-struct cemu_dev {
-	struct cdev cdev;
-	struct gendisk *disk;
-	struct request_queue *rq;
-	struct request_queue *admin_q;
-	struct device *dev;
-	struct block_device *nvme_bdev;
-	struct pci_dev *pdev;
-	struct scatterlist *dma_sgl;
-	int sgl_nents;
-	int minor;
-	size_t size;
-	dma_addr_t p2p_addr;
-	struct kobject *sys_fs;
-	int cur_pind;
-	int cur_rsid;
-	struct list_head prog_list;
-	struct mutex lock;
-};
 
 struct sysfs_program {
 	struct kobj_attribute attr;
@@ -50,13 +26,16 @@ struct sysfs_program {
 	const char *name;
 };
 
-static int bdev_major;
-static int bdev_minor;
-static int cdev_major;
-static int cdev_minor;
+int cemu_bdev_major;
+int cemu_bdev_minor;
+int cemu_cdev_major;
+int cemu_cdev_minor;
+dma_addr_t cemu_p2p_start[CEMU_MAX_MINOR];
+dma_addr_t cemu_p2p_end[CEMU_MAX_MINOR];
+struct cemu_dev *cemu_bdev[CEMU_MAX_MINOR];
 static struct class *bdev_class;
 static struct class *cdev_class;
-static struct cemu_dev *cemu_bdev[CEMU_MAX_MINOR];
+static struct mutex g_lock;
 
 size_t cemu_dev_get_size(struct block_device *bdev)
 {
@@ -211,6 +190,9 @@ static int cemu_load_program(struct cemu_dev *dev, unsigned long arg)
 	int ret = strncpy_from_user((char *)prog_name, download.name, 256);
 	if (ret < 0 || ret >= 256)
 		return -EFAULT;
+	int len = strlen(prog_name);
+	prog_name[len] = download.runtime_scale;
+	prog_name[len + 1] = '\0';
 
 	// TODO: LOCK
 	mutex_lock(&dev->lock);
@@ -630,7 +612,7 @@ int cemu_dev_add(struct pci_dev *pdev, struct nvme_ctrl *ctrl)
 		return PTR_ERR(disk);
 	}
 
-	disk->major = bdev_major;
+	disk->major = cemu_bdev_major;
 	disk->first_minor = dev->minor;
 	disk->minors = 1;
 	disk->fops = &cemu_bdev_ops;
@@ -652,7 +634,7 @@ int cemu_dev_add(struct pci_dev *pdev, struct nvme_ctrl *ctrl)
 
 	dev->disk = disk;
 	dev->rq = disk->queue;
-	cemu_bdev[dev->minor] = dev;
+	dev->ctrl = ctrl;
 	ctrl->cemu_dev = dev;
 	ctrl->cemu_p2p_start = dev->p2p_addr;
 	ctrl->cemu_p2p_end = ctrl->cemu_p2p_start + dev->size;
@@ -671,15 +653,22 @@ int cemu_dev_add(struct pci_dev *pdev, struct nvme_ctrl *ctrl)
 	cdev_init(&dev->cdev, &cdev_fops);
 	dev->cdev.owner = THIS_MODULE;
 
-	err = cdev_add(&dev->cdev, MKDEV(cdev_major, dev->minor), 1);
+	err = cdev_add(&dev->cdev, MKDEV(cemu_cdev_major, dev->minor), 1);
 	if (err)
 		return err;
 
 	device_create(cdev_class, &pdev->dev,
-			MKDEV(cdev_major, dev->minor), NULL,
+			MKDEV(cemu_cdev_major, dev->minor), NULL,
 			"cemuc%d", dev->minor);
 
 	printk(KERN_INFO "CEMU cemu_dev_add: add /dev/cemuc%d\n", dev->minor);
+	mutex_lock(&g_lock);
+	cemu_p2p_start[cemu_bdev_minor] = dev->p2p_addr;
+	cemu_p2p_end[cemu_bdev_minor] = dev->p2p_addr + dev->size;
+	cemu_bdev[cemu_bdev_minor] = dev;
+	cemu_bdev_minor++;
+	pr_info("CEMU drive %d BAR 2 start: 0x%llx, size: 0x%lx\n", dev->minor, dev->p2p_addr, dev->size);
+	mutex_unlock(&g_lock);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(cemu_dev_add);
@@ -693,7 +682,7 @@ void cemu_dev_remove(struct pci_dev *pdev, struct nvme_ctrl *ctrl)
 	dma_unmap_sg(ctrl->dev, dev->dma_sgl, dev->sgl_nents, DMA_BIDIRECTIONAL);
 	pci_p2pmem_free_sgl(pdev, dev->dma_sgl);
 	kobject_put(dev->sys_fs);
-	device_destroy(cdev_class, MKDEV(cdev_major, dev->minor));
+	device_destroy(cdev_class, MKDEV(cemu_cdev_major, dev->minor));
 	cdev_del(&dev->cdev);
 	kfree(dev);
 }
@@ -701,15 +690,17 @@ EXPORT_SYMBOL_GPL(cemu_dev_remove);
 
 static int __init cemu_init(void)
 {
-	bdev_major = register_blkdev(0, CEMU_BLKDEV_NAME);
-	bdev_minor = 0;
+	cemu_bdev_major = register_blkdev(0, CEMU_BLKDEV_NAME);
+	cemu_bdev_minor = 0;
 
-	cdev_major = register_chrdev(0, CEMU_CHRDEV_NAME, &cdev_fops);
-	cdev_minor = 0;
+	cemu_cdev_major = register_chrdev(0, CEMU_CHRDEV_NAME, &cdev_fops);
+	cemu_cdev_minor = 0;
+
+	mutex_init(&g_lock);
 
 	cdev_class = class_create(CEMU_CHRDEV_NAME);
 	if (IS_ERR(cdev_class)) {
-		unregister_chrdev(cdev_major, CEMU_CHRDEV_NAME);
+		unregister_chrdev(cemu_cdev_major, CEMU_CHRDEV_NAME);
 		return PTR_ERR(cdev_class);
 	}
 	return 0;
@@ -718,8 +709,8 @@ static int __init cemu_init(void)
 static void __exit cemu_exit(void)
 {
 	class_destroy(bdev_class);
-	unregister_blkdev(bdev_major, CEMU_BLKDEV_NAME);
-	unregister_chrdev(cdev_major, CEMU_CHRDEV_NAME);
+	unregister_blkdev(cemu_bdev_major, CEMU_BLKDEV_NAME);
+	unregister_chrdev(cemu_cdev_major, CEMU_CHRDEV_NAME);
 }
 
 module_init(cemu_init);

@@ -12,7 +12,6 @@
 #include <uapi/linux/io_uring.h>
 
 #include "io_uring.h"
-#include "opdef.h"
 #include "copy_file_range.h"
 
 ssize_t fdmfs_copy_file_range_kiocb(struct kiocb *kiocb, struct file *file_in,
@@ -49,10 +48,8 @@ int io_copy_file_range_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe
 
 static void copy_complete_iopoll(struct kiocb *kiocb, long res)
 {
-	pr_info("copy_complete_iopoll res %ld\n", res);
 	struct io_copy_file_range *cp = container_of(kiocb, struct io_copy_file_range, kiocb);
 	struct io_kiocb *req = cmd_to_io_kiocb(cp);
-	pr_info("copy_complete_iopoll req %p\n", req);
 
 	if (unlikely(res != req->cqe.res)) {
 		req->cqe.res = res;
@@ -64,7 +61,6 @@ static void copy_complete_iopoll(struct kiocb *kiocb, long res)
 
 static void copy_req_complete(struct io_kiocb *req, struct io_tw_state *ts)
 {
-	// pr_info("copy_req_complete\n");
 	io_req_task_complete(req, ts);
 }
 
@@ -72,7 +68,6 @@ static void copy_complete(struct kiocb *kiocb, long res)
 {
 	struct io_copy_file_range *cp = container_of(kiocb, struct io_copy_file_range, kiocb);
 	struct io_kiocb *req = cmd_to_io_kiocb(cp);
-	// pr_info("copy_complete res %ld\n", res);
 
 	if (!kiocb->dio_complete || !(kiocb->ki_flags & IOCB_DIO_CALLER_COMP)) {
 		if (unlikely(res != req->cqe.res)) {
@@ -87,7 +82,6 @@ static void copy_complete(struct kiocb *kiocb, long res)
 
 int io_copy_file_range(struct io_kiocb *req, unsigned int issue_flags)
 {
-	// pr_info("io_copy_file_range req: %p\n", req);
 	struct io_copy_file_range *cp = io_kiocb_to_cmd(req, struct io_copy_file_range);
 	struct io_ring_ctx *ctx = req->ctx;
 	struct file *out = cp->file_out;
@@ -138,7 +132,6 @@ int io_copy_file_range(struct io_kiocb *req, unsigned int issue_flags)
 	}
 
 	if (ret == -EIOCBQUEUED) {
-		// pr_info("io_copy_file_range EIOCBQUEUED\n");
 		return IOU_ISSUE_SKIP_COMPLETE;
 	}
 
