@@ -3,6 +3,7 @@
 
 #include <linux/pci.h>
 #include <linux/io_uring/cmd.h>
+#include <linux/cemu_ioctl.h>
 #include "nvme.h"
 
 #define CEMU_BLKDEV_NAME	"cemu"
@@ -34,54 +35,12 @@ struct cemu_bio {
 	int runtime_scale;
 };
 
-enum {
-	IOCTL_CEMU_DOWNLOAD,
-	IOCTL_CEMU_ACTIVATE,
-	IOCTL_CEMU_EXECUTE,
-	IOCTL_CEMU_CREATE_MRS,
-	IOCTL_CEMU_DELETE_MRS,
-};
-
-/* IOCTL_CEMU_DOWNLOAD argument */
-struct ioctl_download {
-	const char	*name;
-	void		*addr;
-	int 		size;
-	int		ptype;
-	int		runtime;
-	int		runtime_scale;
-	int		jit;
-	int		indirect;
-	int 		pind;	/* out */
-};
-
-/* IOCTL_CEMU_EXECUTE argument */
-struct ioctl_execute {
-	uint64_t 	cparam1;
-	uint64_t 	cparam2;
-	int		*memory_fd;
-	void 		*buffer;
-	uint16_t	nr_fd;
-	uint16_t	buffer_len;
-	uint16_t	pind;
-	uint16_t	rsid;
-	uint32_t	runtime;
-};
-
-/* IOCTL_CREATE_MRS argument */
-struct ioctl_create_mrs {
-	int		nr_fd;
-	int		*fd;	// fd array of FDMFS
-	long long	*off;	// offset array
-	long long	*size;	// size array
-	uint16_t	rsid;
-};
-
 struct cemu_dev {
 	struct cdev cdev;
 	struct gendisk *disk;
 	struct request_queue *rq;
 	struct request_queue *admin_q;
+	struct request_queue *io_q;
 	struct device *dev;
 	struct block_device *nvme_bdev;
 	struct pci_dev *pdev;

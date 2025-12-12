@@ -49,7 +49,7 @@ void *cemu_dev_get_p2p_addr(struct block_device *bdev)
 	return (void *)phys_to_virt(dev->p2p_addr);
 }
 
-static int cemu_dev_mmap(struct file *filp, struct vm_area_struct *vma)
+static int __maybe_unused cemu_dev_mmap(struct file *filp, struct vm_area_struct *vma)
 {
 	size_t size = vma->vm_end - vma->vm_start;
 	struct cemu_dev *dev = filp->private_data;
@@ -158,7 +158,13 @@ static ssize_t cemu_sysfs_show(struct kobject *kobj,
 		program->pind, program->ptype, program->is_active, program->size);
 }
 
-static struct sysfs_program *find_program_by_id(struct cemu_dev *dev, int pind)
+/*
+ * Program list helpers.
+ *
+ * NOTE: All helpers prefixed with "__" require the caller to hold dev->lock.
+ * This ensures list traversal and lifetime are consistent with removal.
+ */
+static struct sysfs_program *__find_program_by_id(struct cemu_dev *dev, int pind)
 {
 	struct sysfs_program *prog = NULL;
 	list_for_each_entry(prog, &dev->prog_list, list) {
@@ -169,37 +175,66 @@ static struct sysfs_program *find_program_by_id(struct cemu_dev *dev, int pind)
 	return NULL;
 }
 
-static struct sysfs_program *find_program_by_name(struct cemu_dev *dev, const char *name)
+static struct sysfs_program *__find_program_by_name(struct cemu_dev *dev, const char *name)
 {
 	struct sysfs_program *prog = NULL;
 	list_for_each_entry(prog, &dev->prog_list, list) {
-		if (strcmp(prog->name, name) == 0) {
+		if (strcmp(prog->name, name) == 0)
 			return prog;
-		}
 	}
 	return NULL;
+}
+
+static void __remove_program_locked(struct cemu_dev *dev, struct sysfs_program *prog)
+{
+	if (!prog)
+		return;
+
+	sysfs_remove_file(dev->sys_fs, &prog->attr.attr);
+	list_del_init(&prog->list);
+	kfree(prog->attr.attr.name);
+	kfree(prog);
+}
+
+static int __maybe_unused remove_program_by_id(struct cemu_dev *dev, int pind)
+{
+	struct sysfs_program *prog;
+	int ret = 0;
+
+	mutex_lock(&dev->lock);
+	prog = __find_program_by_id(dev, pind);
+	if (!prog) {
+		ret = -ENOENT;
+		goto out;
+	}
+	__remove_program_locked(dev, prog);
+out:
+	mutex_unlock(&dev->lock);
+	return ret;
 }
 
 static int cemu_load_program(struct cemu_dev *dev, unsigned long arg)
 {
 	struct ioctl_download download;
-	if (copy_from_user(&download, (void *)arg, sizeof(download)))
+	if (copy_from_user(&download, (void __user *)arg, sizeof(download)))
 		return -EFAULT;
 
 	char prog_name[256];
-	int ret = strncpy_from_user((char *)prog_name, download.name, 256);
+	const char __user *uname = (const char __user *)(uintptr_t)download.name;
+	void __user *uaddr = (void __user *)(uintptr_t)download.addr;
+	struct ioctl_download __user *udl = (struct ioctl_download __user *)arg;
+
+	int ret = strncpy_from_user(prog_name, uname, sizeof(prog_name));
 	if (ret < 0 || ret >= 256)
 		return -EFAULT;
 	int len = strlen(prog_name);
 	prog_name[len] = download.runtime_scale;
 	prog_name[len + 1] = '\0';
 
-	// TODO: LOCK
 	mutex_lock(&dev->lock);
-	struct sysfs_program *prog = find_program_by_name(dev, prog_name);
+	struct sysfs_program *prog = __find_program_by_name(dev, prog_name);
 	if (prog) {
-		if (copy_to_user(&((struct ioctl_download *)arg)->pind,
-				&prog->pind, sizeof(prog->pind))) {
+		if (copy_to_user(&udl->pind, &prog->pind, sizeof(prog->pind))) {
 			printk(KERN_ERR "CEMU CSD copy_to_user failed\n");
 		}
 		printk(KERN_ERR "CEMU CSD program %s already exists\n", prog_name);
@@ -208,7 +243,7 @@ static int cemu_load_program(struct cemu_dev *dev, unsigned long arg)
 	}
 
 	struct iov_iter iter;
-	iov_iter_ubuf(&iter, ITER_SOURCE, (void __user *)download.addr, download.size);
+	iov_iter_ubuf(&iter, ITER_SOURCE, uaddr, download.size);
 
 	struct cemu_bio *cio = kzalloc(sizeof(*cio), GFP_KERNEL);
 	cio->submit.waiter = current;
@@ -226,7 +261,8 @@ static int cemu_load_program(struct cemu_dev *dev, unsigned long arg)
 	atomic_set(&cio->ref, 1);
 
 	size_t count = iov_iter_count(&iter);
-	printk(KERN_INFO "cemu_bdev_ioctl: addr %p, size %x, iov_iter_count %lu\n", download.addr, download.size, count);
+	printk(KERN_INFO "cemu_bdev_ioctl: addr %p, size %x, iov_iter_count %lu\n",
+	       uaddr, download.size, count);
 
 	/* borrowed from iomap */
 	int nr_pages = bio_iov_vecs_to_alloc(&iter, BIO_MAX_VECS);
@@ -281,10 +317,19 @@ static int cemu_load_program(struct cemu_dev *dev, unsigned long arg)
 	if (copied) {
 		// create sysfs entry
 		prog = kzalloc(sizeof(struct sysfs_program), GFP_KERNEL);
+		if (!prog) {
+			ret = -ENOMEM;
+			goto out;
+		}
 		struct kobj_attribute *attr = &prog->attr;
 		sysfs_attr_init(attr);
 		attr->attr.mode = 0440;
 		attr->attr.name = kstrdup((char *)prog_name, GFP_KERNEL);
+		if (!attr->attr.name) {
+			kfree(prog);
+			ret = -ENOMEM;
+			goto out;
+		}
 		attr->show = cemu_sysfs_show;
 		prog->name = attr->attr.name;
 		prog->is_active = 0;
@@ -293,11 +338,15 @@ static int cemu_load_program(struct cemu_dev *dev, unsigned long arg)
 		prog->size = download.size;
 		list_add(&prog->list, &dev->prog_list);
 		ret = sysfs_create_file(dev->sys_fs, &attr->attr);
-		if (ret)
+		if (ret) {
 			pr_err("CEMU CSD sysfs_create_file failed\n");
+			list_del_init(&prog->list);
+			kfree(prog->attr.attr.name);
+			kfree(prog);
+			goto out;
+		}
 
-		if (copy_to_user(&((struct ioctl_download *)arg)->pind,
-				&prog->pind, sizeof(prog->pind))) {
+		if (copy_to_user(&udl->pind, &prog->pind, sizeof(prog->pind))) {
 			printk(KERN_ERR "CEMU CSD copy_to_user failed\n");
 		}
 		ret = copied;
@@ -307,39 +356,80 @@ out:
 	return ret;
 }
 
-static int cemu_program_activation(struct cemu_dev *dev, unsigned long arg)
+static int cemu_unload_program(struct cemu_dev *dev, unsigned long arg)
 {
 	struct ioctl_download download;
-	if (copy_from_user(&download, (void *)arg, sizeof(download)))
+	if (copy_from_user(&download, (void __user *)arg, sizeof(download)))
 		return -EFAULT;
 
-	struct sysfs_program *prog = find_program_by_id(dev, download.pind);
-	if (!prog)
+	mutex_lock(&dev->lock);
+	struct sysfs_program *prog = __find_program_by_id(dev, download.pind);
+	if (!prog) {
+		mutex_unlock(&dev->lock);
 		return -ENOENT;
+	}
+
+	struct nvme_command cmd = {};
+	cmd.load.nsid = 3;
+	cmd.load.opcode = 0x22;
+	cmd.load.pind = download.pind;
+	cmd.load.ptype = download.ptype;
+	cmd.load.sel = 1;	// unload program
+	cmd.load.pid = 0;
+	cmd.load.prp1 = 0;
+	cmd.load.prp2 = 0;
+
+	int ret = nvme_submit_sync_cmd(dev->io_q, &cmd, NULL, 0);
+	if (ret != 0)
+		pr_err("CEMU CSD unload program failed: %d\n", ret);
+	else
+		__remove_program_locked(dev, prog);
+	mutex_unlock(&dev->lock);
+	return ret;
+}
+
+static int cemu_program_activation(struct cemu_dev *dev, unsigned long arg, int sel)
+{
+	struct ioctl_download download;
+	if (copy_from_user(&download, (void __user *)arg, sizeof(download)))
+		return -EFAULT;
+
+	mutex_lock(&dev->lock);
+	struct sysfs_program *prog = __find_program_by_id(dev, download.pind);
+	if (!prog) {
+		mutex_unlock(&dev->lock);
+		return -ENOENT;
+	}
 
 	struct nvme_command cmd = {};
 	cmd.activation.nsid = 3;
 	cmd.activation.opcode = 0x23;
 	cmd.activation.pind = download.pind;
-	cmd.activation.sel = 1;
+	cmd.activation.sel = sel;
 	int ret = nvme_submit_sync_cmd(dev->admin_q, &cmd, NULL, 0);
 	if (ret == 0)
-		prog->is_active = 1;
+		prog->is_active = (sel != 0);
+	mutex_unlock(&dev->lock);
 	return ret;
 }
 
 static int cemu_program_execute(struct cemu_dev *dev, unsigned long arg)
 {
 	struct ioctl_execute execute;
-	if (copy_from_user(&execute, (void *)arg, sizeof(execute)))
+	if (copy_from_user(&execute, (void __user *)arg, sizeof(execute)))
 		return -EFAULT;
 
-	struct sysfs_program *prog = find_program_by_id(dev, execute.pind);
-	if (!prog)
+	mutex_lock(&dev->lock);
+	struct sysfs_program *prog = __find_program_by_id(dev, execute.pind);
+	if (!prog) {
+		mutex_unlock(&dev->lock);
 		return -ENOENT;
-
-	if (prog->is_active == 0)
+	}
+	if (prog->is_active == 0) {
+		mutex_unlock(&dev->lock);
 		return -EINVAL;
+	}
+	mutex_unlock(&dev->lock);
 
 	return 0;
 }
@@ -347,7 +437,7 @@ static int cemu_program_execute(struct cemu_dev *dev, unsigned long arg)
 static int cemu_create_mrs(struct cemu_dev *dev, unsigned long arg)
 {
 	struct ioctl_create_mrs create;
-	if (copy_from_user(&create, (void *)arg, sizeof(create)))
+	if (copy_from_user(&create, (void __user *)arg, sizeof(create)))
 		return -EFAULT;
 	if (create.nr_fd <= 0 || create.nr_fd >= 128)
 		return -EINVAL;
@@ -361,11 +451,11 @@ static int cemu_create_mrs(struct cemu_dev *dev, unsigned long arg)
 	long long *size = (void *)off + sizeof(long long) * create.nr_fd;
 	struct nvme_memory_range *mr = (void *)size + sizeof(long long) * create.nr_fd;
 	int ret = -EFAULT;
-	if (copy_from_user(mr_fd, create.fd, sizeof(int) * create.nr_fd))
+	if (copy_from_user(mr_fd, (void __user *)(uintptr_t)create.fd, sizeof(int) * create.nr_fd))
 		goto err;
-	if (copy_from_user(off, create.off, sizeof(long long) * create.nr_fd))
+	if (copy_from_user(off, (void __user *)(uintptr_t)create.off, sizeof(long long) * create.nr_fd))
 		goto err;
-	if (copy_from_user(size, create.size, sizeof(long long) * create.nr_fd))
+	if (copy_from_user(size, (void __user *)(uintptr_t)create.size, sizeof(long long) * create.nr_fd))
 		goto err;
 	ret = 0;
 
@@ -405,7 +495,7 @@ static int cemu_create_mrs(struct cemu_dev *dev, unsigned long arg)
 	if (ret != 0)
 		goto err;
 	uint16_t rsid = result.u16;
-	if (copy_to_user(&((struct ioctl_create_mrs *)arg)->rsid, &rsid, sizeof(rsid)))
+	if (copy_to_user(&((struct ioctl_create_mrs __user *)arg)->rsid, &rsid, sizeof(rsid)))
 		ret = -EFAULT;
 err:
 	kfree(buf);
@@ -415,7 +505,7 @@ err:
 static int cemu_delete_mrs(struct cemu_dev *dev, unsigned long arg)
 {
 	struct ioctl_create_mrs delete;
-	if (copy_from_user(&delete, (void *)arg, sizeof(delete)))
+	if (copy_from_user(&delete, (void __user *)arg, sizeof(delete)))
 		return -EFAULT;
 
 	union nvme_result result;
@@ -433,18 +523,28 @@ static long cemu_cdev_ioctl(struct file *filp, unsigned int ioctl_cmd,
 		unsigned long arg)
 {
 	struct cemu_dev *dev = filp->private_data;
-	printk(KERN_INFO "cemu_cdev_ioctl\n");
 
 	switch (ioctl_cmd) {
 	case IOCTL_CEMU_DOWNLOAD:
+		printk(KERN_INFO "cemu_cdev_ioctl IOCTL_CEMU_DOWNLOAD\n");
 		return cemu_load_program(dev, arg);
+	case IOCTL_CEMU_UNLOAD:
+		printk(KERN_INFO "cemu_cdev_ioctl IOCTL_CEMU_UNLOAD\n");
+		return cemu_unload_program(dev, arg);
 	case IOCTL_CEMU_ACTIVATE:
-		return cemu_program_activation(dev, arg);
+		printk(KERN_INFO "cemu_cdev_ioctl IOCTL_CEMU_ACTIVATE\n");
+		return cemu_program_activation(dev, arg, 1);
+	case IOCTL_CEMU_DEACTIVATE:
+		printk(KERN_INFO "cemu_cdev_ioctl IOCTL_CEMU_DEACTIVATE\n");
+		return cemu_program_activation(dev, arg, 0);
 	case IOCTL_CEMU_EXECUTE:
+		printk(KERN_INFO "cemu_cdev_ioctl IOCTL_CEMU_EXECUTE\n");
 		return cemu_program_execute(dev, arg);
 	case IOCTL_CEMU_CREATE_MRS:
+		printk(KERN_INFO "cemu_cdev_ioctl IOCTL_CEMU_CREATE_MRS\n");
 		return cemu_create_mrs(dev, arg);
 	case IOCTL_CEMU_DELETE_MRS:
+		printk(KERN_INFO "cemu_cdev_ioctl IOCTL_CEMU_DELETE_MRS\n");
 		return cemu_delete_mrs(dev, arg);
 	default:
 		printk(KERN_ERR "CEMU CSD ioctl: unknown ioctl cmd %d!!!\n", ioctl_cmd);
@@ -482,12 +582,18 @@ static int program_execute(struct cemu_dev *dev, struct io_uring_cmd *ioucmd)
 {
 	// const struct ioctl_execute *execute = io_uring_sqe_cmd(ioucmd->sqe);
 
-	struct sysfs_program *prog = find_program_by_id(dev, 1);
-	if (!prog)
+	mutex_lock(&dev->lock);
+	struct sysfs_program *prog = __find_program_by_id(dev, 1);
+	if (!prog) {
+		mutex_unlock(&dev->lock);
 		return -ENOENT;
+	}
 
-	if (prog->is_active == 0)
+	if (prog->is_active == 0) {
+		mutex_unlock(&dev->lock);
 		return -EINVAL;
+	}
+	mutex_unlock(&dev->lock);
 
 	struct cemu_bio *cio = kzalloc(sizeof(*cio), GFP_KERNEL);
 	cio->wait_for_completion = false;
@@ -602,6 +708,11 @@ int cemu_dev_add(struct pci_dev *pdev, struct nvme_ctrl *ctrl)
 	}
 	dev->nvme_bdev = ns->disk->part0;
 	dev->admin_q = ctrl->admin_q;
+	/*
+	 * Submit management/compute commands on an I/O queue:
+	 * use the request_queue of the underlying NVMe namespace block device.
+	 */
+	dev->io_q = bdev_get_queue(dev->nvme_bdev);
 
 	cemu_p2pmem_setup(pdev, dev);
 	dev->minor = ctrl->instance;
@@ -676,11 +787,19 @@ EXPORT_SYMBOL_GPL(cemu_dev_add);
 void cemu_dev_remove(struct pci_dev *pdev, struct nvme_ctrl *ctrl)
 {
 	struct cemu_dev *dev = (struct cemu_dev*)ctrl->cemu_dev;
+	struct sysfs_program *prog, *tmp;
 
 	printk(KERN_INFO "CEMU cemu_dev_remove\n");
 	cemu_bdev[dev->minor] = NULL;
 	dma_unmap_sg(ctrl->dev, dev->dma_sgl, dev->sgl_nents, DMA_BIDIRECTIONAL);
 	pci_p2pmem_free_sgl(pdev, dev->dma_sgl);
+
+	/* Remove all sysfs entries and free program objects we allocated. */
+	mutex_lock(&dev->lock);
+	list_for_each_entry_safe(prog, tmp, &dev->prog_list, list)
+		__remove_program_locked(dev, prog);
+	mutex_unlock(&dev->lock);
+
 	kobject_put(dev->sys_fs);
 	device_destroy(cdev_class, MKDEV(cemu_cdev_major, dev->minor));
 	cdev_del(&dev->cdev);
