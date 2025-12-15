@@ -715,7 +715,17 @@ int cemu_dev_add(struct pci_dev *pdev, struct nvme_ctrl *ctrl)
 	dev->io_q = bdev_get_queue(dev->nvme_bdev);
 
 	cemu_p2pmem_setup(pdev, dev);
-	dev->minor = ctrl->instance;
+	/*
+	 * Keep the "nvmeX" naming based on the controller instance, but use the
+	 * same numeric minor as the underlying namespace disk (nvmeXn1) so users
+	 * can correlate nodes by (major,minor) minor value.
+	 */
+	dev->minor = MINOR(disk_devt(ns->disk));
+	if (dev->minor >= CEMU_MAX_MINOR) {
+		printk(KERN_ERR "CEMU: nvme minor %d exceeds CEMU_MAX_MINOR %d\n",
+		       dev->minor, CEMU_MAX_MINOR);
+		return -EINVAL;
+	}
 
 	printk(KERN_INFO "CEMU cemu_dev_add start alloc_disk\n");
 	disk = blk_alloc_disk(ctrl->numa_node);
@@ -728,7 +738,7 @@ int cemu_dev_add(struct pci_dev *pdev, struct nvme_ctrl *ctrl)
 	disk->minors = 1;
 	disk->fops = &cemu_bdev_ops;
 	disk->private_data = dev;
-	sprintf(disk->disk_name, "cemu%d", dev->minor);
+	sprintf(disk->disk_name, "nvme%dm2", ctrl->instance);
 	blk_set_stacking_limits(&disk->queue->limits);
 	disk->queue->limits.logical_block_size = 1;	// required for load program, since program size is arbitrary
 	disk->queue->limits.physical_block_size = 1;
@@ -758,7 +768,8 @@ int cemu_dev_add(struct pci_dev *pdev, struct nvme_ctrl *ctrl)
 		return -ENOMEM;
 	INIT_LIST_HEAD(&dev->prog_list);
 
-	printk(KERN_INFO "CEMU cemu_dev_add: add /dev/cemu%d\n", dev->minor);
+	printk(KERN_INFO "CEMU cemu_dev_add: add /dev/nvme%dm2 (minor=%d)\n",
+	       ctrl->instance, dev->minor);
 
 	/* Add char device for compute namespace */
 	cdev_init(&dev->cdev, &cdev_fops);
@@ -770,14 +781,33 @@ int cemu_dev_add(struct pci_dev *pdev, struct nvme_ctrl *ctrl)
 
 	device_create(cdev_class, &pdev->dev,
 			MKDEV(cemu_cdev_major, dev->minor), NULL,
-			"cemuc%d", dev->minor);
+			"nvme%dc3", ctrl->instance);
 
-	printk(KERN_INFO "CEMU cemu_dev_add: add /dev/cemuc%d\n", dev->minor);
+	printk(KERN_INFO "CEMU cemu_dev_add: add /dev/nvme%dc3 (minor=%d)\n",
+	       ctrl->instance, dev->minor);
 	mutex_lock(&g_lock);
-	cemu_p2p_start[cemu_bdev_minor] = dev->p2p_addr;
-	cemu_p2p_end[cemu_bdev_minor] = dev->p2p_addr + dev->size;
-	cemu_bdev[cemu_bdev_minor] = dev;
-	cemu_bdev_minor++;
+	/*
+	 * Reuse holes created by device removal; cemu_bdev_minor tracks the
+	 * highest used slot (packed array with possible NULL entries).
+	 */
+	dev->idx = -1;
+	for (int i = 0; i < cemu_bdev_minor; i++) {
+		if (!cemu_bdev[i]) {
+			dev->idx = i;
+			break;
+		}
+	}
+	if (dev->idx < 0) {
+		if (cemu_bdev_minor >= CEMU_MAX_MINOR) {
+			mutex_unlock(&g_lock);
+			return -ENOSPC;
+		}
+		dev->idx = cemu_bdev_minor++;
+	}
+
+	cemu_p2p_start[dev->idx] = dev->p2p_addr;
+	cemu_p2p_end[dev->idx] = dev->p2p_addr + dev->size;
+	cemu_bdev[dev->idx] = dev;
 	pr_info("CEMU drive %d BAR 2 start: 0x%llx, size: 0x%lx\n", dev->minor, dev->p2p_addr, dev->size);
 	mutex_unlock(&g_lock);
 	return 0;
@@ -790,7 +820,15 @@ void cemu_dev_remove(struct pci_dev *pdev, struct nvme_ctrl *ctrl)
 	struct sysfs_program *prog, *tmp;
 
 	printk(KERN_INFO "CEMU cemu_dev_remove\n");
-	cemu_bdev[dev->minor] = NULL;
+	mutex_lock(&g_lock);
+	if (dev->idx >= 0 && dev->idx < CEMU_MAX_MINOR) {
+		cemu_bdev[dev->idx] = NULL;
+		cemu_p2p_start[dev->idx] = 0;
+		cemu_p2p_end[dev->idx] = 0;
+	}
+	while (cemu_bdev_minor > 0 && !cemu_bdev[cemu_bdev_minor - 1])
+		cemu_bdev_minor--;
+	mutex_unlock(&g_lock);
 	dma_unmap_sg(ctrl->dev, dev->dma_sgl, dev->sgl_nents, DMA_BIDIRECTIONAL);
 	pci_p2pmem_free_sgl(pdev, dev->dma_sgl);
 

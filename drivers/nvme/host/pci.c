@@ -896,6 +896,8 @@ struct nvme_memory_rw_cmd {
 static inline int is_cemu_p2p_addr(struct nvme_ctrl *ctrl, dma_addr_t addr)
 {
 	for (int i = 0; i < cemu_bdev_minor; i++) {
+		if (!cemu_bdev[i])
+			continue;
 		if (addr >= cemu_bdev[i]->ctrl->cemu_p2p_start && addr < cemu_bdev[i]->ctrl->cemu_p2p_end)
 			return i;
 	}

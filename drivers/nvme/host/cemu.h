@@ -47,6 +47,12 @@ struct cemu_dev {
 	struct scatterlist *dma_sgl;
 	struct nvme_ctrl *ctrl;
 	int sgl_nents;
+	/*
+	 * Index into the packed cemu_bdev[] / cemu_p2p_*[] arrays used by the
+	 * NVMe host path for P2P address lookup.
+	 */
+	int idx;
+	/* Minor number used for /dev node allocation (cemu majors). */
 	int minor;
 	size_t size;
 	dma_addr_t p2p_addr;
